@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Khoj Video Analyzer | খোঁজ ভিডিও অ্যানালাইজার</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+</head>
+<body>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">🔍</div>
+        <div>
+          <h1 class="brand-title">KHOJ VIDEO ANALYZER</h1>
+          <span class="brand-subtitle">খোঁজ: বাংলা ভিডিও ও এআই স্পিচ ফ্যাক্ট-চেকার</span>
+        </div>
+      </div>
+      
+      <!-- Live Backend Status & Settings Trigger -->
+      <div class="server-status-pill" id="serverStatusBtn" title="Click to configure backend URL">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Checking Cloud Run...</span>
+        <span style="font-size: 0.75rem; opacity: 0.6;">⚙️</span>
+      </div>
+    </header>
+
+    <!-- Main Card -->
+    <main class="glass-card">
+      <!-- Input Mode Tabs -->
+      <div class="tabs-nav">
+        <button class="tab-btn active" id="tabUrlBtn" onclick="switchTab('url')">
+          <span>🔗</span> ভিডিও ইউআরএল (Video URL)
+        </button>
+        <button class="tab-btn" id="tabUploadBtn" onclick="switchTab('upload')">
+          <span>📁</span> ফাইল আপলোড (Media File)
+        </button>
+      </div>
+
+      <!-- Mode 1: URL Input -->
+      <div id="urlInputContainer">
+        <div class="input-group">
+          <div class="input-box">
+            <input 
+              type="text" 
+              id="videoUrlInput" 
+              class="input-field" 
+              placeholder="Paste YouTube, Facebook Reel/Video, TikTok or Instagram link..."
+              autocomplete="off"
+            >
+            <button class="input-icon-btn" id="pasteBtn" title="Paste from clipboard">📋</button>
+          </div>
+        </div>
+
+        <!-- Quick Samples -->
+        <div class="quick-samples">
+          <span class="samples-label">Quick Test:</span>
+          <button class="sample-chip" onclick="loadSample('https://youtu.be/NwquG0Uf1As?si=nSNqKFUW4u-IJC3E')">
+            🏦 বাংলাদেশ ব্যাংক (Tech)
+          </button>
+          <button class="sample-chip" onclick="loadSample('https://youtu.be/TE5ZJB-6gVE?si=taPo9aoUIIHLGU-a')">
+            🪄 এআই কি ব্ল্যাক ম্যাজিক?
+          </button>
+          <button class="sample-chip" onclick="loadSample('https://www.facebook.com/share/v/1MTsqew7BU/')">
+            🧠 After You Die (Reel)
+          </button>
+        </div>
+      </div>
+
+      <!-- Mode 2: File Upload (Hidden by default) -->
+      <div id="fileUploadContainer" style="display: none;">
+        <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+          <div class="dropzone-icon">📥</div>
+          <p style="font-weight: 600; font-size: 1.05rem; margin-bottom: 0.3rem;">
+            Click to upload or drag & drop video/audio
+          </p>
+          <p style="font-size: 0.85rem; color: var(--text-dim);">
+            Supports MP4, M4A, MP3, WAV, MKV (Max 50MB)
+          </p>
+          <input type="file" id="fileInput" accept="video/*,audio/*" style="display: none;">
+        </div>
+        <div id="selectedFileInfo" style="display: none; margin-bottom: 1.25rem; font-size: 0.9rem; color: var(--accent-cyan);"></div>
+      </div>
+
+      <!-- Options & Toggles -->
+      <div class="options-row">
+        <div class="toggle-group">
+          <label class="custom-checkbox">
+            <input type="checkbox" id="chkAudio" checked>
+            <span>ভয়েস ট্রান্সক্রিপশন (Speech-to-Text)</span>
+          </label>
+          <label class="custom-checkbox">
+            <input type="checkbox" id="chkOcr" checked>
+            <span>অন-স্ক্রিন লেখা পাঠ (Visual OCR)</span>
+          </label>
+        </div>
+
+        <div>
+          <select id="selectLanguage" style="background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.4rem 0.8rem; font-family: inherit; font-size: 0.88rem; outline: none;">
+            <option value="">স্বয়ংক্রিয় ভাষা (Auto-Detect)</option>
+            <option value="bn" selected>বাংলা (Bengali)</option>
+            <option value="en">English (ইংরেজি)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Submit Button -->
+      <button class="btn-primary" id="analyzeBtn" onclick="startAnalysis()">
+        <span>🚀</span> বিশ্লেষণ শুরু করুন (Start Analysis)
+      </button>
+    </main>
+
+    <!-- Real-time Loading & Stepper Panel -->
+    <section class="loading-panel" id="loadingPanel">
+      <div class="loading-header">
+        <h3 style="font-size: 1.1rem; font-weight: 700; color: #60a5fa;">
+          ⚙️ এআই পাইপলাইন প্রসেস চলছে...
+        </h3>
+        <span style="font-family: var(--font-mono); font-size: 0.9rem; color: var(--text-dim);" id="elapsedTimer">
+          0.0s elapsed
+        </span>
+      </div>
+
+      <div class="pipeline-stepper">
+        <div class="step-item" id="step1">
+          <div class="step-icon">1</div>
+          <div>
+            <div style="font-weight: 600; font-size: 0.95rem;">মিডিয়া স্ট্রিম ও মেটাডাটা নিষ্কাশন (yt-dlp)</div>
+            <div style="font-size: 0.8rem; opacity: 0.8;">অডিও ও ভিডিও ফ্রেম সংগ্রহ করা হচ্ছে</div>
+          </div>
+        </div>
+
+        <div class="step-item" id="step2">
+          <div class="step-icon">2</div>
+          <div>
+            <div style="font-weight: 600; font-size: 0.95rem;">ফাইন-টিউনড বাংলা হুইস্পার ট্রান্সক্রিপশন (ASR)</div>
+            <div style="font-size: 0.8rem; opacity: 0.8;">সিপিইউ-তে নিখুঁত বাংলা কথ্য রূপান্তর চলছে</div>
+          </div>
+        </div>
+
+        <div class="step-item" id="step3">
+          <div class="step-icon">3</div>
+          <div>
+            <div style="font-weight: 600; font-size: 0.95rem;">NVIDIA Nemotron 3 Ultra 550B এডিটিং</div>
+            <div style="font-size: 0.8rem; opacity: 0.8;">ব্যাকরণ, নিখুঁত বানান ও বাক্য গঠন পরিশোধন</div>
+          </div>
+        </div>
+
+        <div class="step-item" id="step4">
+          <div class="step-icon">4</div>
+          <div>
+            <div style="font-weight: 600; font-size: 0.95rem;">ভিজ্যুয়াল অন-স্ক্রিন টেক্সট রিডিং (OCR)</div>
+            <div style="font-size: 0.8rem; opacity: 0.8;">ভিডিও ফ্রেমের ব্যানার ও টিক্কার বিশ্লেষণ</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Results Section -->
+    <section class="results-section" id="resultsSection">
+      <!-- Metadata Grid -->
+      <div class="metadata-grid">
+        <div class="meta-box">
+          <div class="meta-label">ভিডিও শিরোনাম (Title)</div>
+          <div class="meta-value bengali-text" id="resTitle">-</div>
+        </div>
+        <div class="meta-box">
+          <div class="meta-label">উৎস / প্ল্যাটফর্ম</div>
+          <div class="meta-value" id="resPlatform">-</div>
+        </div>
+        <div class="meta-box">
+          <div class="meta-label">দৈর্ঘ্য (Duration)</div>
+          <div class="meta-value" id="resDuration">-</div>
+        </div>
+        <div class="meta-box">
+          <div class="meta-label">প্রসেসিং টাইম (Total Time)</div>
+          <div class="meta-value" style="color: #34d399;" id="resProcessingTime">-</div>
+        </div>
+      </div>
+
+      <!-- Action Buttons Bar -->
+      <div style="display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+        <button class="btn-sm-copy" onclick="copyFullReport()" style="background: rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd; font-weight: 600; padding: 0.6rem 1.2rem;">
+          📋 সম্পূর্ণ ফ্যাক্ট-চেক রিপোর্ট কপি করুন (Copy Report)
+        </button>
+        <button class="btn-sm-copy" onclick="downloadJsonResult()" style="padding: 0.6rem 1.2rem;">
+          💾 ডাউনলোড JSON (Download JSON)
+        </button>
+      </div>
+
+      <!-- 1. Polished Transcript (Nemotron) -->
+      <div class="transcript-card">
+        <div class="card-title-bar">
+          <div class="card-title">
+            <span>✨</span>
+            <span>পরিশোধিত বাংলা ট্রান্সক্রিপ্ট (Polished Transcript)</span>
+            <span class="tag-badge nemotron" id="nemotronBadge">NVIDIA Nemotron 550B</span>
+          </div>
+          <button class="btn-sm-copy" onclick="copyText('resPolishedText')">কপি করুন</button>
+        </div>
+        <div class="transcript-body bengali-text" id="resPolishedText">-</div>
+      </div>
+
+      <!-- 2. Raw Whisper ASR -->
+      <div class="transcript-card">
+        <div class="card-title-bar">
+          <div class="card-title">
+            <span>🎙️</span>
+            <span>মূল এএসআর আউটপুট (Raw Whisper ASR)</span>
+            <span class="tag-badge whisper">Whisper Bengali Int8</span>
+          </div>
+          <button class="btn-sm-copy" onclick="copyText('resRawText')">কপি করুন</button>
+        </div>
+        <div class="transcript-body bengali-text" style="color: #94a3b8; font-size: 1rem;" id="resRawText">-</div>
+      </div>
+
+      <!-- 3. Timestamped Segments -->
+      <div class="transcript-card" id="segmentsCard">
+        <div class="card-title-bar">
+          <div class="card-title">
+            <span>⏱️</span>
+            <span>টাইমস্ট্যাম্প অনুযায়ী বক্তব্য (Timestamped Segments)</span>
+          </div>
+        </div>
+        <div class="segments-accordion" id="resSegmentsList"></div>
+      </div>
+
+      <!-- 4. On-Screen OCR Text -->
+      <div class="transcript-card" id="ocrCard">
+        <div class="card-title-bar">
+          <div class="card-title">
+            <span>🔤</span>
+            <span>অন-স্ক্রিন ব্যানার ও টেক্সট (Visual OCR)</span>
+          </div>
+        </div>
+        <div class="transcript-body bengali-text" id="resOcrText">কোনো অন-স্ক্রিন টেক্সট পাওয়া যায়নি।</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Backend Settings Modal -->
+  <div class="modal-overlay" id="settingsModal" onclick="closeSettingsIfOutside(event)">
+    <div class="modal-content">
+      <h3 style="margin-bottom: 1rem; font-size: 1.2rem; display: flex; justify-content: space-between; align-items: center;">
+        <span>⚙️ Backend Configuration</span>
+        <button onclick="toggleSettingsModal()" style="background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 1.2rem;">✕</button>
+      </h3>
+      <p style="font-size: 0.88rem; color: var(--text-muted); margin-bottom: 1.25rem;">
+        Set your active Khoj Video Analyzer API endpoint. Defaults to Google Cloud Run.
+      </p>
+
+      <label style="font-size: 0.82rem; font-weight: 600; color: var(--text-dim); display: block; margin-bottom: 0.4rem;">
+        API ENDPOINT URL:
+      </label>
+      <input type="text" id="backendUrlInput" class="input-field" style="margin-bottom: 1rem;">
+
+      <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem;">
+        <button class="sample-chip" onclick="setPresetBackend('https://khoj-video-analyzer-ju6xye7j6q-uc.a.run.app')">
+          ☁️ Cloud Run (Live)
+        </button>
+        <button class="sample-chip" onclick="setPresetBackend('http://127.0.0.1:8080')">
+          💻 Localhost:8080
+        </button>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+        <button class="btn-sm-copy" onclick="toggleSettingsModal()">Cancel</button>
+        <button class="btn-primary" style="width: auto; padding: 0.6rem 1.5rem;" onclick="saveBackendUrl()">
+          Save & Reconnect
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

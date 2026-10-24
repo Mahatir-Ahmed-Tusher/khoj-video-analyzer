@@ -1,0 +1,40 @@
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Sensitive credentials & environment files
+.env
+.env.*
+!.env.example
+
+# Local cache & temporary media
+hf_cache/
+tmp/
+*.log
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Internal private guides & test scratch files
+DEPLOYMENT_GUIDE_INTERNAL.md
+test_*.py
+compare_*.py
+run_transcription_batch.py
+transcribe_*.py
+inspect_*.py
+generate_report.py
+*.json
+*.md
+!README.md

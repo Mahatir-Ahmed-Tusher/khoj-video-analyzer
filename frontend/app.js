@@ -288,8 +288,12 @@ function renderResults(data) {
   document.getElementById("resProcessingTime").textContent = `⚡ ${(data.processing_time_seconds || 0).toFixed(2)}s`;
 
   // Transcripts
-  const polishedText = data.spoken_transcript || "(কোনো বক্তব্য শনাক্ত হয়নি)";
-  const rawText = data.raw_spoken_transcript || "(কোনো এএসআর টেক্সট নেই)";
+  const fallbackNotice = data.message && data.message.includes("Could not download") 
+    ? `⚠️ ${data.message}`
+    : "(কোনো বক্তব্য শনাক্ত হয়নি)";
+
+  const polishedText = data.spoken_transcript || fallbackNotice;
+  const rawText = data.raw_spoken_transcript || fallbackNotice;
   
   document.getElementById("resPolishedText").textContent = polishedText;
   document.getElementById("resRawText").textContent = rawText;

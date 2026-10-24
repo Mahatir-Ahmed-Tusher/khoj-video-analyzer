@@ -1,7 +1,10 @@
 import os
 import re
+import json
+import base64
+import urllib.request
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 import yt_dlp
 import httpx
 from bs4 import BeautifulSoup
@@ -29,9 +32,43 @@ def detect_platform(url: str) -> str:
         return "reddit"
     return "generic"
 
+def get_effective_cookies_path() -> Optional[str]:
+    """
+    Ensure cookies file exists if YT_COOKIES_PATH, YT_COOKIES_BASE64, or YT_COOKIES_TEXT is configured.
+    """
+    if settings.YT_COOKIES_PATH and os.path.exists(settings.YT_COOKIES_PATH):
+        return settings.YT_COOKIES_PATH
+
+    raw_text = ""
+    cookies_base64 = os.getenv("YT_COOKIES_BASE64", "").strip()
+    if cookies_base64:
+        try:
+            raw_text = base64.b64decode(cookies_base64).decode("utf-8", errors="ignore")
+        except Exception as e:
+            logger.warning(f"Could not decode YT_COOKIES_BASE64: {e}")
+
+    if not raw_text and settings.YT_COOKIES_TEXT:
+        raw_text = settings.YT_COOKIES_TEXT.strip()
+
+    if raw_text:
+        tmp_cookie = "/tmp/cookies.txt" if os.name != "nt" else os.path.join(settings.LOCAL_TEMP_DIR, "cookies.txt")
+        os.makedirs(os.path.dirname(tmp_cookie), exist_ok=True)
+        try:
+            with open(tmp_cookie, "w", encoding="utf-8") as f:
+                f.write(raw_text)
+            return tmp_cookie
+        except Exception as e:
+            logger.error(f"Failed to write cookies to file: {e}")
+
+    if os.path.exists("/tmp/cookies.txt"):
+        return "/tmp/cookies.txt"
+
+    return None
+
 def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
     """
-    Build hardened yt-dlp options with anti-bot evasion and Android/iOS client emulation.
+    Build hardened yt-dlp options with anti-bot evasion, Node.js EJS challenge solver,
+    and optional proxy or cookie authentication.
     """
     ua = custom_ua or settings.DEFAULT_USER_AGENT
     
@@ -47,20 +84,120 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
         'source_address': '0.0.0.0', # Force IPv4 to bypass cloud datacenter IPv6 blocks
-        # Emulate official Android / iOS mobile clients to bypass YouTube/Meta datacenter blocks
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'mweb'],
-            }
-        }
+        # Enable Node.js JS runtime for n-sig and signature challenge solving
+        'js_runtimes': {'node': {}},
+        'remote_components': ['ejs:github'],
     }
     
     # Check for optional cookies file or environment string
-    cookies_path = os.getenv("YT_COOKIES_PATH")
-    if cookies_path and os.path.exists(cookies_path):
+    cookies_path = get_effective_cookies_path()
+    if cookies_path:
         opts['cookiefile'] = cookies_path
         
+    # Check for optional proxy
+    if settings.YT_PROXY:
+        opts['proxy'] = settings.YT_PROXY
+        
     return opts
+
+def fetch_youtube_captions(
+    url: str,
+    preferred_lang: Optional[str] = None,
+    pre_extracted_info: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Directly ingest official subtitles or automatic captions from YouTube's TimedText API.
+    This bypasses media stream downloading completely, is 100% immune to googlevideo datacenter
+    media blocks, and returns exact millisecond timestamped segments.
+    """
+    ydl_opts = get_base_ydl_opts()
+    
+    try:
+        info = pre_extracted_info
+        if not info:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+        if not info:
+            return None
+            
+        auto = info.get('automatic_captions') or {}
+        subs = info.get('subtitles') or {}
+        
+        # Priority list for Bengali, then English, then specified language
+        candidates = []
+        if preferred_lang:
+            candidates.extend([preferred_lang, f"{preferred_lang}-orig"])
+        candidates.extend(['bn-orig', 'bn', 'bn-BD', 'en-orig', 'en', 'en-US'])
+        
+        selected_track = None
+        source_type = None
+        selected_lang = 'unknown'
+        
+        # 1. First priority: Check official uploaded/curated subtitles
+        for lc in candidates:
+            if lc in subs and subs[lc]:
+                selected_track = next((t for t in subs[lc] if t.get('ext') == 'json3'), subs[lc][0])
+                source_type = 'official_subtitles'
+                selected_lang = 'bn' if 'bn' in lc else 'en'
+                break
+                
+        # 2. Second priority: Check auto-generated captions
+        if not selected_track:
+            for lc in candidates:
+                if lc in auto and auto[lc]:
+                    selected_track = next((t for t in auto[lc] if t.get('ext') == 'json3'), auto[lc][0])
+                    source_type = 'automatic_captions'
+                    selected_lang = 'bn' if 'bn' in lc else 'en'
+                    break
+                    
+        if not selected_track or not selected_track.get('url'):
+            return None
+            
+        track_url = selected_track['url']
+        if 'fmt=' not in track_url:
+            track_url += '&fmt=json3'
+            
+        headers = {
+            'User-Agent': settings.DEFAULT_USER_AGENT,
+            'Accept': 'application/json,text/html,*/*'
+        }
+        
+        req = urllib.request.Request(track_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            events = data.get('events', [])
+            segments = []
+            full_text_parts = []
+            
+            for ev in events:
+                t_start = round(ev.get('tStartMs', 0) / 1000.0, 2)
+                d_duration = round(ev.get('dDurationMs', 0) / 1000.0, 2)
+                t_end = round(t_start + d_duration, 2)
+                segs = ev.get('segs', [])
+                line = ''.join(s.get('utf8', '') for s in segs).strip()
+                if line and line != '\n':
+                    segments.append({
+                        'start': t_start,
+                        'end': t_end,
+                        'text': line
+                    })
+                    full_text_parts.append(line)
+                    
+            if not segments:
+                return None
+                
+            raw_transcript = ' '.join(full_text_parts)
+            logger.info(f"Direct TimedText captions successfully fetched ({len(segments)} segments, {len(raw_transcript)} chars, source: {source_type})")
+            return {
+                'raw_transcript': raw_transcript,
+                'segments': segments,
+                'detected_language': selected_lang,
+                'source': source_type
+            }
+    except Exception as e:
+        logger.warning(f"Direct YouTube caption ingestion failed: {e}. Falling back to audio stream...")
+        return None
 
 async def extract_metadata(url: str) -> Dict[str, Any]:
     """
@@ -96,7 +233,8 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
                 "author": author,
                 "duration_seconds": duration,
                 "thumbnail_url": thumbnail,
-                "existing_subtitles": existing_subtitles
+                "existing_subtitles": existing_subtitles,
+                "_raw_info": info
             }
     except Exception as e:
         logger.warning(f"yt-dlp metadata extraction failed: {e}. Trying fallback...")

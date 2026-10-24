@@ -15,7 +15,8 @@ from app.services.stream_extractor import (
     extract_metadata,
     download_audio_stream,
     download_video_for_ocr,
-    detect_platform
+    detect_platform,
+    fetch_youtube_captions
 )
 from app.services.audio_transcriber import transcriber_service
 from app.services.bengali_refiner import bengali_refiner
@@ -151,17 +152,29 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
         try:
             # A. Audio speech transcription (run in threadpool to prevent blocking the event loop)
             if req.extract_audio:
-                audio_path = await asyncio.to_thread(download_audio_stream, url, temp_dir)
-                if audio_path and os.path.exists(audio_path):
-                    logger.info(f"Audio stream downloaded ({os.path.getsize(audio_path) / 1024:.1f} KB). Starting Whisper transcription...")
-                    spoken_transcript, spoken_segments, detected_lang = await asyncio.to_thread(
-                        transcriber_service.transcribe,
-                        audio_path,
-                        req.language
-                    )
-                    safe_remove_file(audio_path)
-                else:
-                    logger.warning("Could not obtain audio stream. Skipping speech transcription.")
+                # If YouTube, attempt direct TimedText caption ingestion first (zero media block risk on Cloud Run)
+                if platform == "youtube":
+                    raw_info = metadata.get("_raw_info")
+                    caption_result = await asyncio.to_thread(fetch_youtube_captions, url, req.language, raw_info)
+                    if caption_result and caption_result.get("raw_transcript"):
+                        spoken_transcript = caption_result["raw_transcript"]
+                        spoken_segments = caption_result["segments"]
+                        detected_lang = caption_result["detected_language"]
+                        logger.info(f"YouTube transcript successfully ingested via {caption_result['source']} ({len(spoken_segments)} segments).")
+
+                # If captions were not available or non-YouTube platform, proceed to audio stream download
+                if not spoken_transcript:
+                    audio_path = await asyncio.to_thread(download_audio_stream, url, temp_dir)
+                    if audio_path and os.path.exists(audio_path):
+                        logger.info(f"Audio stream downloaded ({os.path.getsize(audio_path) / 1024:.1f} KB). Starting Whisper transcription...")
+                        spoken_transcript, spoken_segments, detected_lang = await asyncio.to_thread(
+                            transcriber_service.transcribe,
+                            audio_path,
+                            req.language
+                        )
+                        safe_remove_file(audio_path)
+                    else:
+                        logger.warning("Could not obtain audio stream. Skipping speech transcription.")
 
             # B. Video OCR (editor text, banners, subtitles)
             if req.extract_ocr:

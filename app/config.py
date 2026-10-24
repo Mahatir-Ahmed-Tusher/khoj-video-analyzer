@@ -57,4 +57,9 @@ class Settings(BaseModel):
     )
     SOCIAL_BOT_USER_AGENT: str = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
 
+    # YouTube & Anti-bot Egress Settings
+    YT_COOKIES_TEXT: str = os.getenv("YT_COOKIES_TEXT", "")
+    YT_COOKIES_PATH: str = os.getenv("YT_COOKIES_PATH", "")
+    YT_PROXY: str = os.getenv("YT_PROXY", "")
+
 settings = Settings()

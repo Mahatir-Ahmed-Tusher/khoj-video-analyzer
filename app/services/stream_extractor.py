@@ -89,8 +89,8 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
         'source_address': '0.0.0.0', # Force IPv4 to bypass cloud datacenter IPv6 blocks
-        # Enable Node.js JS runtime for n-sig and signature challenge solving
-        'js_runtimes': {'node': {}},
+        # Enable Deno & Node.js JS runtimes for n-sig and signature challenge solving
+        'js_runtimes': {'deno': {}, 'node': {}},
         'remote_components': ['ejs:github'],
     }
     

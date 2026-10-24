@@ -26,7 +26,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     nodejs \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Deno (yt-dlp default preferred JS runtime for YouTube BotGuard & n-challenge solver)
+RUN curl -fsSL https://deno.land/install.sh | sh && \
+    ln -s /root/.deno/bin/deno /usr/local/bin/deno
 
 WORKDIR /app
 

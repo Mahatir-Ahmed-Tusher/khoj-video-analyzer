@@ -32,11 +32,14 @@ def detect_platform(url: str) -> str:
         return "reddit"
     return "generic"
 
+import tempfile
+
 def get_effective_cookies_path() -> Optional[str]:
     """
     Ensure cookies file exists if YT_COOKIES_PATH, YT_COOKIES_BASE64, or YT_COOKIES_TEXT is configured.
     """
     if settings.YT_COOKIES_PATH and os.path.exists(settings.YT_COOKIES_PATH):
+        logger.info(f"Using cookies from configured path: {settings.YT_COOKIES_PATH}")
         return settings.YT_COOKIES_PATH
 
     raw_text = ""
@@ -51,16 +54,18 @@ def get_effective_cookies_path() -> Optional[str]:
         raw_text = settings.YT_COOKIES_TEXT.strip()
 
     if raw_text:
-        tmp_cookie = "/tmp/cookies.txt" if os.name != "nt" else os.path.join(settings.LOCAL_TEMP_DIR, "cookies.txt")
-        os.makedirs(os.path.dirname(tmp_cookie), exist_ok=True)
+        tmp_dir = tempfile.gettempdir()
+        tmp_cookie = os.path.join(tmp_dir, "cookies.txt")
         try:
             with open(tmp_cookie, "w", encoding="utf-8") as f:
                 f.write(raw_text)
+            logger.info(f"Successfully loaded {len(raw_text)} bytes of YouTube cookies to {tmp_cookie}")
             return tmp_cookie
         except Exception as e:
             logger.error(f"Failed to write cookies to file: {e}")
 
     if os.path.exists("/tmp/cookies.txt"):
+        logger.info("Found existing /tmp/cookies.txt")
         return "/tmp/cookies.txt"
 
     return None
@@ -73,8 +78,8 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
     ua = custom_ua or settings.DEFAULT_USER_AGENT
     
     opts: Dict[str, Any] = {
-        'quiet': True,
-        'no_warnings': True,
+        'quiet': False,
+        'no_warnings': False,
         'skip_download': True,
         'geo_bypass': True,
         'user_agent': ua,
@@ -93,6 +98,7 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
     cookies_path = get_effective_cookies_path()
     if cookies_path:
         opts['cookiefile'] = cookies_path
+        logger.info(f"yt-dlp configured with cookiefile: {cookies_path}")
         
     # Check for optional proxy
     if settings.YT_PROXY:

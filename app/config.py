@@ -55,7 +55,7 @@ class Settings(BaseModel):
     # Anti-bot User-Agents (Mirroring khoj-content-service crawler)
     DEFAULT_USER_AGENT: str = os.getenv(
         "DEFAULT_USER_AGENT",
-        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Mobile Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     )
     SOCIAL_BOT_USER_AGENT: str = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
 

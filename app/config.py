@@ -17,6 +17,8 @@ class Settings(BaseModel):
     # Service settings
     SERVICE_NAME: str = "khoj-video-analyzer"
     BASE_DIR: str = BASE_DIR
+    LOCAL_CACHE_DIR: str = LOCAL_CACHE_DIR
+    LOCAL_TEMP_DIR: str = LOCAL_TEMP_DIR
     PORT: int = int(os.getenv("PORT", "8080"))
     HOST: str = os.getenv("HOST", "0.0.0.0")
     

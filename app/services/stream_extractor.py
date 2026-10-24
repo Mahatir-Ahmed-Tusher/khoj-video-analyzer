@@ -49,7 +49,7 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
         # Emulate official Android / iOS mobile clients to bypass YouTube/Meta datacenter blocks
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios', 'web'],
+                'player_client': ['android'],
             }
         }
     }

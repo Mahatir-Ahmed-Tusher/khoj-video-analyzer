@@ -20,8 +20,8 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com
 ENV_FLAGS=""
 if [ -f ".env" ]; then
     echo "--> Detected local .env file. Passing environment variables to Cloud Run..."
-    # Filter out comments and blank lines to pass as key=value list
-    VARS=$(grep -v '^#' .env | grep -v '^$' | paste -sd "," -)
+    # Filter out comments, blank lines, and reserved Cloud Run variables (PORT)
+    VARS=$(grep -v '^#' .env | grep -v '^$' | grep -v '^PORT=' | paste -sd "," -)
     if [ -n "$VARS" ]; then
         ENV_FLAGS="--set-env-vars=$VARS"
     fi

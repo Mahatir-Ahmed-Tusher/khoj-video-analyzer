@@ -151,6 +151,16 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
     }
     
     try:
+        # Build opener with optional proxy support for cloud datacenter environments
+        if settings.YT_PROXY:
+            proxy_handler = urllib.request.ProxyHandler({
+                'http': settings.YT_PROXY,
+                'https': settings.YT_PROXY
+            })
+            opener = urllib.request.build_opener(proxy_handler)
+        else:
+            opener = urllib.request.build_opener()
+
         req = urllib.request.Request(
             player_url,
             data=json.dumps(payload).encode("utf-8"),
@@ -158,7 +168,7 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
             method="POST"
         )
         
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with opener.open(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             
         playability = data.get("playabilityStatus", {}).get("status")
@@ -215,8 +225,15 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
         detected_lang = selected_track.get("languageCode", "unknown")
         
         caption_req = urllib.request.Request(base_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(caption_req, timeout=10) as c_resp:
-            xml_content = c_resp.read().decode("utf-8", errors="ignore")
+        xml_content = ""
+        # Direct fetch first (signed URL has ip=0.0.0.0 and avoids shared proxy rate-limits)
+        try:
+            with urllib.request.urlopen(caption_req, timeout=10) as c_resp:
+                xml_content = c_resp.read().decode("utf-8", errors="ignore")
+        except Exception as direct_err:
+            logger.info(f"Direct timedtext fetch failed: {direct_err}. Trying via opener/proxy...")
+            with opener.open(caption_req, timeout=12) as c_resp:
+                xml_content = c_resp.read().decode("utf-8", errors="ignore")
             
         root = ET.fromstring(xml_content)
         segments = []

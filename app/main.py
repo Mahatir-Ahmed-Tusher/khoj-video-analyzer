@@ -152,15 +152,21 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
         try:
             # A. Audio speech transcription (run in threadpool to prevent blocking the event loop)
             if req.extract_audio:
-                # If YouTube, attempt direct TimedText caption ingestion first (zero media block risk on Cloud Run)
+                # If YouTube, check if InnerTube already extracted captions during metadata extraction
                 if platform == "youtube":
-                    raw_info = metadata.get("_raw_info")
-                    caption_result = await asyncio.to_thread(fetch_youtube_captions, url, req.language, raw_info)
-                    if caption_result and caption_result.get("raw_transcript"):
-                        spoken_transcript = caption_result["raw_transcript"]
-                        spoken_segments = caption_result["segments"]
-                        detected_lang = caption_result["detected_language"]
-                        logger.info(f"YouTube transcript successfully ingested via {caption_result['source']} ({len(spoken_segments)} segments).")
+                    innertube_data = metadata.get("_innertube_result")
+                    if innertube_data and innertube_data.get("has_captions") and innertube_data.get("raw_transcript"):
+                        spoken_transcript = innertube_data["raw_transcript"]
+                        spoken_segments = innertube_data["segments"]
+                        detected_lang = innertube_data["detected_language"]
+                        logger.info(f"YouTube transcript instantly ingested via InnerTube metadata cache ({len(spoken_segments)} segments).")
+                    else:
+                        caption_result = await asyncio.to_thread(fetch_youtube_captions, url, req.language, metadata.get("_raw_info"))
+                        if caption_result and caption_result.get("raw_transcript"):
+                            spoken_transcript = caption_result["raw_transcript"]
+                            spoken_segments = caption_result["segments"]
+                            detected_lang = caption_result["detected_language"]
+                            logger.info(f"YouTube transcript successfully ingested via {caption_result['source']} ({len(spoken_segments)} segments).")
 
                 # If captions were not available or non-YouTube platform, proceed to audio stream download
                 if not spoken_transcript:

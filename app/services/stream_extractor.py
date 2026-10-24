@@ -3,6 +3,7 @@ import re
 import json
 import base64
 import urllib.request
+import xml.etree.ElementTree as ET
 import logging
 from typing import Dict, Any, Optional, Tuple, List
 import yt_dlp
@@ -92,6 +93,11 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
         # Enable Deno & Node.js JS runtimes for n-sig and signature challenge solving
         'js_runtimes': {'deno': {}, 'node': {}},
         'remote_components': ['ejs:github'],
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web']
+            }
+        }
     }
     
     # Check for optional cookies file or environment string
@@ -106,18 +112,182 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
         
     return opts
 
+def extract_youtube_video_id(url: str) -> Optional[str]:
+    """
+    Extract standard 11-character YouTube video ID from various URL formats.
+    """
+    patterns = [
+        r'(?:v=|\/v\/|youtu\.be\/|\/embed\/|\/shorts\/)([a-zA-Z0-9_-]{11})',
+        r'^([a-zA-Z0-9_-]{11})$'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Directly query YouTube InnerTube Android Player API for metadata and caption tracks.
+    Bypasses BotGuard/PO Token restrictions on cloud datacenter IPs.
+    """
+    player_url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+    payload = {
+        "context": {
+            "client": {
+                "clientName": "ANDROID",
+                "clientVersion": "20.10.38",
+                "hl": preferred_lang or "bn",
+                "gl": "BD"
+            }
+        },
+        "videoId": video_id
+    }
+    
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "com.google.android.youtube/20.10.38 (Linux; U; Android 14; US) gzip",
+        "Accept-Language": "en-US,en;q=0.9,bn;q=0.8"
+    }
+    
+    try:
+        req = urllib.request.Request(
+            player_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            
+        playability = data.get("playabilityStatus", {}).get("status")
+        if playability != "OK":
+            reason = data.get("playabilityStatus", {}).get("reason", "Unknown error")
+            return {"success": False, "reason": reason}
+            
+        details = data.get("videoDetails", {})
+        title = details.get("title", "")
+        author = details.get("author", "")
+        duration_seconds = int(details.get("lengthSeconds", 0))
+        thumbnails = details.get("thumbnail", {}).get("thumbnails", [])
+        thumbnail_url = thumbnails[-1].get("url") if thumbnails else None
+        
+        caption_tracks = (
+            data.get("captions", {})
+            .get("playerCaptionsTracklistRenderer", {})
+            .get("captionTracks", [])
+        )
+        
+        if not caption_tracks:
+            return {
+                "success": True,
+                "has_captions": False,
+                "video_id": video_id,
+                "title": title,
+                "author": author,
+                "duration_seconds": duration_seconds,
+                "thumbnail_url": thumbnail_url,
+                "raw_transcript": None,
+                "segments": [],
+                "detected_language": "unknown"
+            }
+            
+        candidates = []
+        if preferred_lang:
+            candidates.append(preferred_lang)
+        candidates.extend(["bn", "bn-BD", "en", "en-US"])
+        
+        selected_track = None
+        for cand in candidates:
+            for track in caption_tracks:
+                lc = track.get("languageCode", "").lower()
+                if cand == lc or lc.startswith(cand):
+                    selected_track = track
+                    break
+            if selected_track:
+                break
+                
+        if not selected_track:
+            selected_track = caption_tracks[0]
+            
+        base_url = selected_track.get("baseUrl")
+        detected_lang = selected_track.get("languageCode", "unknown")
+        
+        caption_req = urllib.request.Request(base_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(caption_req, timeout=10) as c_resp:
+            xml_content = c_resp.read().decode("utf-8", errors="ignore")
+            
+        root = ET.fromstring(xml_content)
+        segments = []
+        text_parts = []
+        
+        for elem in root.findall(".//text"):
+            start = float(elem.attrib.get("start", 0))
+            dur = float(elem.attrib.get("dur", 0))
+            end = round(start + dur, 2)
+            txt = (elem.text or "").strip()
+            txt = re.sub(r'&amp;', '&', txt)
+            txt = re.sub(r'&quot;', '"', txt)
+            txt = re.sub(r'&#39;', "'", txt)
+            txt = re.sub(r'&lt;', '<', txt)
+            txt = re.sub(r'&gt;', '>', txt)
+            if txt:
+                segments.append({"start": start, "end": end, "text": txt})
+                text_parts.append(txt)
+                
+        if not segments:
+            for p in root.findall(".//p"):
+                t_ms = int(p.attrib.get("t", 0))
+                d_ms = int(p.attrib.get("d", 0))
+                start = round(t_ms / 1000.0, 2)
+                end = round((t_ms + d_ms) / 1000.0, 2)
+                p_text = "".join(p.itertext()).strip()
+                if p_text:
+                    segments.append({"start": start, "end": end, "text": p_text})
+                    text_parts.append(p_text)
+                    
+        raw_transcript = " ".join(text_parts)
+        return {
+            "success": True,
+            "has_captions": len(segments) > 0,
+            "video_id": video_id,
+            "title": title,
+            "author": author,
+            "duration_seconds": duration_seconds,
+            "thumbnail_url": thumbnail_url,
+            "raw_transcript": raw_transcript if segments else None,
+            "segments": segments,
+            "detected_language": detected_lang
+        }
+    except Exception as ex:
+        logger.warning(f"InnerTube Android player query failed: {ex}")
+        return {"success": False, "reason": str(ex)}
+
 def fetch_youtube_captions(
     url: str,
     preferred_lang: Optional[str] = None,
     pre_extracted_info: Optional[Dict[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
     """
-    Directly ingest official subtitles or automatic captions from YouTube's TimedText API.
-    This bypasses media stream downloading completely, is 100% immune to googlevideo datacenter
-    media blocks, and returns exact millisecond timestamped segments.
+    Directly ingest official subtitles or automatic captions from YouTube.
+    First checks InnerTube Android API, then falls back to TimedText scraping.
     """
+    # 1. First priority: Direct InnerTube Android client
+    vid = extract_youtube_video_id(url)
+    if vid:
+        it_res = fetch_youtube_innertube(vid, preferred_lang)
+        if it_res.get("success") and it_res.get("has_captions") and it_res.get("raw_transcript"):
+            logger.info(f"InnerTube Android captions fetched ({len(it_res['segments'])} segments, {len(it_res['raw_transcript'])} chars)")
+            return {
+                'raw_transcript': it_res["raw_transcript"],
+                'segments': it_res["segments"],
+                'detected_language': it_res["detected_language"],
+                'source': 'innertube_android_captions'
+            }
+
+    # 2. Secondary fallback: yt-dlp extracted subtitles if pre_extracted_info provided
     ydl_opts = get_base_ydl_opts()
-    
     try:
         info = pre_extracted_info
         if not info:
@@ -130,7 +300,6 @@ def fetch_youtube_captions(
         auto = info.get('automatic_captions') or {}
         subs = info.get('subtitles') or {}
         
-        # Priority list for Bengali, then English, then specified language
         candidates = []
         if preferred_lang:
             candidates.extend([preferred_lang, f"{preferred_lang}-orig"])
@@ -140,7 +309,6 @@ def fetch_youtube_captions(
         source_type = None
         selected_lang = 'unknown'
         
-        # 1. First priority: Check official uploaded/curated subtitles
         for lc in candidates:
             if lc in subs and subs[lc]:
                 selected_track = next((t for t in subs[lc] if t.get('ext') == 'json3'), subs[lc][0])
@@ -148,7 +316,6 @@ def fetch_youtube_captions(
                 selected_lang = 'bn' if 'bn' in lc else 'en'
                 break
                 
-        # 2. Second priority: Check auto-generated captions
         if not selected_track:
             for lc in candidates:
                 if lc in auto and auto[lc]:
@@ -210,8 +377,29 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
     Extract video metadata (title, author, duration, existing subtitles) without downloading.
     """
     platform = detect_platform(url)
-    ydl_opts = get_base_ydl_opts()
     
+    # 1. Fast path for YouTube: InnerTube Android API (Instant, BotGuard-free)
+    if platform == "youtube":
+        vid = extract_youtube_video_id(url)
+        if vid:
+            it_res = fetch_youtube_innertube(vid)
+            if it_res.get("success"):
+                logger.info(f"InnerTube Android metadata extracted for video {vid} (has_captions: {it_res.get('has_captions')})")
+                return {
+                    "success": True,
+                    "platform": platform,
+                    "video_id": vid,
+                    "title": it_res.get("title") or "YouTube Video",
+                    "author": it_res.get("author") or "YouTube Creator",
+                    "duration_seconds": it_res.get("duration_seconds", 0),
+                    "thumbnail_url": it_res.get("thumbnail_url"),
+                    "existing_subtitles": "[Captions available]" if it_res.get("has_captions") else "",
+                    "_innertube_result": it_res,
+                    "_raw_info": None
+                }
+                
+    # 2. General path: yt-dlp extractor
+    ydl_opts = get_base_ydl_opts()
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)

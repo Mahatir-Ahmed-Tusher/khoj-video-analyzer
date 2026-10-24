@@ -214,6 +214,7 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
         spoken_segments=spoken_segments,
         on_screen_text=on_screen_text,
         merged_content_for_factcheck=merged_summary,
+        detected_language=detected_lang,
         processing_time_seconds=elapsed,
         message="Analysis completed successfully." if spoken_transcript else "Could not download media stream from URL (platform anti-bot block on cloud IP). Please use direct media file upload, or switch to your local server (127.0.0.1:8080)."
     )

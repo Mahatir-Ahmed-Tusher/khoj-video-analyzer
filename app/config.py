@@ -62,6 +62,6 @@ class Settings(BaseModel):
     # YouTube & Anti-bot Egress Settings
     YT_COOKIES_TEXT: str = os.getenv("YT_COOKIES_TEXT", "")
     YT_COOKIES_PATH: str = os.getenv("YT_COOKIES_PATH", "")
-    YT_PROXY: str = os.getenv("YT_PROXY", "")
+    YT_PROXY: str = os.getenv("YT_PROXY", "http://wsaoyvpk:b5bpq4ay0e0o@45.38.107.97:6014").strip().strip('"').strip("'")
 
 settings = Settings()

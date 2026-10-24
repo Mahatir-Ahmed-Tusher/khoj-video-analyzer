@@ -6,11 +6,21 @@ set -e
 
 SERVICE_NAME="khoj-video-analyzer"
 REGION="us-central1" # Recommended region with 100% Always-Free tier coverage
+DEFAULT_PROJECT="gen-lang-client-0825088284"
 
 echo "=========================================================="
 echo " Starting Deployment for: $SERVICE_NAME"
 echo " Target Region: $REGION"
 echo "=========================================================="
+
+# 0. Ensure GCP project is set
+CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null || true)
+if [ -z "$CURRENT_PROJECT" ] || [ "$CURRENT_PROJECT" = "(unset)" ]; then
+    echo "--> No GCP project set. Setting project to: $DEFAULT_PROJECT..."
+    gcloud config set project "$DEFAULT_PROJECT"
+else
+    echo "--> Using active GCP project: $CURRENT_PROJECT"
+fi
 
 # 1. Enable required Google Cloud APIs
 echo "--> Enabling Cloud Run and Cloud Build APIs..."

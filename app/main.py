@@ -207,15 +207,25 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
     refiner_model_used = None
     is_bengali = bool(detected_lang and any(detected_lang.lower().startswith(prefix) for prefix in ("bn", "ben")))
     if is_bengali and settings.ENABLE_BENGALI_REFINER and spoken_transcript:
-        refined_text, model_name = await bengali_refiner.refine(spoken_transcript)
-        if refined_text:
-            spoken_transcript = refined_text
-            if model_name and model_name != "original_transcript":
-                refiner_model_used = model_name
+        word_count = len(spoken_transcript.split())
+        # For lengthy transcripts (>1200 words / >10 mins), full LLM generation takes 40s+ and risks timeout.
+        # Format with fast paragraphing directly to deliver instant sub-second response.
+        if word_count > 1200 and spoken_segments:
+            logger.info(f"Bengali transcript is extensive ({word_count} words). Applying fast paragraph formatting to prevent API timeout.")
+            formatted_para = format_paragraphs(spoken_segments)
+            if formatted_para:
+                spoken_transcript = formatted_para
+        else:
+            refined_text, model_name = await bengali_refiner.refine(spoken_transcript)
+            if refined_text:
+                spoken_transcript = refined_text
+                if model_name and model_name != "original_transcript":
+                    refiner_model_used = model_name
     elif spoken_segments and not refiner_model_used:
         formatted_para = format_paragraphs(spoken_segments)
         if formatted_para:
             spoken_transcript = formatted_para
+
 
     # 3. Synthesize merged content for FactCheckEngine
     merged_summary = build_factcheck_summary(

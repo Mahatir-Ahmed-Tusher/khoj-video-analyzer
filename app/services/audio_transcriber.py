@@ -113,36 +113,45 @@ class AudioTranscriber:
         target_model_name, normalized_lang = self._resolve_model_name_for_lang(language)
 
         # Phase 1: Rapid unbiased language detection using multilingual detector
-        if normalized_lang is None:
-            try:
-                # Use lightweight unbiased multilingual detector model (Systran/faster-whisper-tiny, 39MB)
-                # Fine-tuned single-language models (e.g. small-bn-int8) skew logits to 100% Bengali on Indic speech.
-                detector_model = self.get_model("Systran/faster-whisper-tiny")
-                audio_array = decode_audio(audio_path)
-                auto_lang, auto_prob, _ = detector_model.detect_language(audio_array)
+        # We always detect the actual audio language to safeguard against cross-script phonetic corruption
+        # (e.g. when frontend or API defaults to 'bn' on a Hindi or English video).
+        try:
+            # Use lightweight unbiased multilingual detector model (Systran/faster-whisper-tiny, 39MB)
+            detector_model = self.get_model("Systran/faster-whisper-tiny")
+            audio_array = decode_audio(audio_path)
+            auto_lang, auto_prob, _ = detector_model.detect_language(audio_array)
+            auto_lang = (auto_lang or "bn").strip().lower()
+            logger.info(
+                f"Multilingual detector identified language: '{auto_lang}' (confidence: {auto_prob:.2f})"
+            )
 
-                auto_lang = (auto_lang or "bn").strip().lower()
-                logger.info(
-                    f"Multilingual detector identified language: '{auto_lang}' (confidence: {auto_prob:.2f})"
-                )
+            # Check if requested language conflicts with actual audio
+            # Example: client requested 'bn', but audio is Hindi (auto_lang='hi', confidence >= 0.60)
+            if normalized_lang and normalized_lang != auto_lang:
+                if auto_lang in ("hi", "en") and auto_prob >= 0.60:
+                    logger.warning(
+                        f"Requested language '{normalized_lang}' conflicts with actual audio '{auto_lang}' "
+                        f"(confidence: {auto_prob:.2f}). Overriding to '{auto_lang}' to prevent cross-script transliteration corruption."
+                    )
+                    normalized_lang = auto_lang
+            elif normalized_lang is None:
+                normalized_lang = auto_lang
 
-                # Determine the correct specialized model for the detected language
-                correct_model, normalized_lang = self._get_model_for_detected_lang(auto_lang)
+            # Determine the correct specialized model for the language
+            correct_model, normalized_lang = self._get_model_for_detected_lang(normalized_lang)
+            logger.info(
+                f"Routing to specialized model '{correct_model}' for language '{normalized_lang}'..."
+            )
+            model = self.get_model(correct_model)
+            target_model_name = correct_model
 
-                # Route to specialized model (Bengali, Hindi, or English)
-                logger.info(
-                    f"Routing to specialized model '{correct_model}' for language '{normalized_lang}'..."
-                )
-                model = self.get_model(correct_model)
-                target_model_name = correct_model
-
-            except Exception as detect_err:
-                logger.warning(f"Language auto-detection failed ({detect_err}), defaulting to Bengali.")
+        except Exception as detect_err:
+            logger.warning(f"Language detection failed ({detect_err}), falling back to requested: {normalized_lang or 'bn'}.")
+            if not normalized_lang:
                 normalized_lang = "bn"
-                model = self.get_model(settings.WHISPER_MODEL_BN)
-                target_model_name = settings.WHISPER_MODEL_BN
-        else:
+            target_model_name, normalized_lang = self._resolve_model_name_for_lang(normalized_lang)
             model = self.get_model(target_model_name)
+
 
         segments_data = []
         full_text_pieces = []

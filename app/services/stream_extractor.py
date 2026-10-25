@@ -93,6 +93,12 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
         # Enable Deno & Node.js JS runtimes for n-sig and signature challenge solving
         'js_runtimes': {'deno': {}, 'node': {}},
         'remote_components': ['ejs:github'],
+        # Android & iOS mobile player clients bypass BotGuard & PO token checks on cloud IPs
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'],
+            }
+        },
     }
     
     # Check for optional cookies file or environment string
@@ -513,10 +519,66 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
         "existing_subtitles": ""
     }
 
+def download_youtube_audio_invidious(video_id: str, target_dir: str) -> Optional[str]:
+    """
+    Fallback mechanism for YouTube videos without captions when yt-dlp is blocked on cloud IPs.
+    Queries reliable Invidious API instances to retrieve direct audio stream formats.
+    """
+    instances = [
+        "https://yt.chocolatemoo53.com",
+        "https://invidious.nerdvpn.de",
+        "https://inv.nadeko.net",
+    ]
+    for inst in instances:
+        try:
+            api_url = f"{inst}/api/v1/videos/{video_id}"
+            req = urllib.request.Request(
+                api_url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                adaptive = data.get("adaptiveFormats", [])
+                audio = [f for f in adaptive if f.get("type", "").startswith("audio/") and f.get("url")]
+                if not audio:
+                    continue
+                # Pick lowest bitrate stream to download rapidly and keep RAM small
+                audio.sort(key=lambda x: int(x.get("bitrate", 999999)))
+                chosen = audio[0]
+                url = chosen["url"]
+                ext = chosen.get("container", "m4a")
+                out_path = os.path.join(target_dir, f"audio.{ext}")
+                
+                dl_req = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    }
+                )
+                with urllib.request.urlopen(dl_req, timeout=25) as dl_resp, open(out_path, "wb") as out_f:
+                    while True:
+                        chunk = dl_resp.read(128 * 1024)
+                        if not chunk:
+                            break
+                        out_f.write(chunk)
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+                    logger.info(f"Successfully downloaded YouTube audio fallback via Invidious ({inst}) - {os.path.getsize(out_path)} bytes")
+                    return out_path
+        except Exception as e:
+            logger.debug(f"Invidious instance {inst} fallback failed: {e}")
+    return None
+
 def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
     """
     Download ONLY the lowest bitrate audio stream (32-64kbps).
     Extremely lightweight: typical 2-minute video audio is only ~1MB to 2MB.
+    Implements multi-stage fallback:
+      1. Primary yt-dlp with android client & anti-bot evasion
+      2. If primary fails (e.g. proxy or cookie error), retry direct with clean android options
+      3. If YouTube and yt-dlp fails, query Invidious public API instances to fetch audio
     """
     output_template = os.path.join(target_dir, "audio.%(ext)s")
     ydl_opts = get_base_ydl_opts()
@@ -526,23 +588,40 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
         'format': 'ba/b[height<=360]/b[height<=480]/worst/b',
         'outtmpl': output_template,
         'noplaylist': True,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '64',
-        }] if False else [] # Keep raw stream to avoid extra transcode unless needed
     })
     
+    # 1. Primary download attempt
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            # Find the downloaded file
+            ydl.extract_info(url, download=True)
             for file in os.listdir(target_dir):
                 if file.startswith("audio."):
                     return os.path.join(target_dir, file)
     except Exception as e:
-        logger.error(f"Error downloading audio stream: {e}")
-        
+        logger.warning(f"Primary audio download failed: {e}. Attempting clean retry...")
+
+    # 2. Retry direct without cookies or proxy if primary failed
+    if ydl_opts.get('cookiefile') or ydl_opts.get('proxy'):
+        try:
+            clean_opts = dict(ydl_opts)
+            clean_opts.pop('cookiefile', None)
+            clean_opts.pop('proxy', None)
+            with yt_dlp.YoutubeDL(clean_opts) as ydl:
+                ydl.extract_info(url, download=True)
+                for file in os.listdir(target_dir):
+                    if file.startswith("audio."):
+                        return os.path.join(target_dir, file)
+        except Exception as retry_err:
+            logger.warning(f"Direct clean retry also failed: {retry_err}")
+
+    # 3. For YouTube: fallback to Invidious API
+    vid_id = extract_youtube_video_id(url)
+    if vid_id:
+        logger.info(f"Invoking Invidious audio fallback for YouTube video {vid_id}...")
+        invidious_path = download_youtube_audio_invidious(vid_id, target_dir)
+        if invidious_path:
+            return invidious_path
+
     return None
 
 def download_video_for_ocr(url: str, target_dir: str) -> Optional[str]:
@@ -562,11 +641,23 @@ def download_video_for_ocr(url: str, target_dir: str) -> Optional[str]:
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            ydl.extract_info(url, download=True)
             for file in os.listdir(target_dir):
                 if file.startswith("video_ocr."):
                     return os.path.join(target_dir, file)
     except Exception as e:
-        logger.error(f"Error downloading video for OCR: {e}")
+        logger.warning(f"Primary video download for OCR failed: {e}. Retrying clean...")
+        if ydl_opts.get('cookiefile') or ydl_opts.get('proxy'):
+            try:
+                clean_opts = dict(ydl_opts)
+                clean_opts.pop('cookiefile', None)
+                clean_opts.pop('proxy', None)
+                with yt_dlp.YoutubeDL(clean_opts) as ydl:
+                    ydl.extract_info(url, download=True)
+                    for file in os.listdir(target_dir):
+                        if file.startswith("video_ocr."):
+                            return os.path.join(target_dir, file)
+            except Exception as ex2:
+                logger.error(f"Clean retry for OCR video also failed: {ex2}")
         
     return None

@@ -28,9 +28,12 @@ class AudioTranscriber:
     def _resolve_model_name_for_lang(self, lang: Optional[str]) -> Tuple[str, Optional[str]]:
         """
         Map language code to target fine-tuned model and normalized language code.
+        Returns (model_name, normalized_lang). When lang is None, returns None as
+        normalized_lang to signal auto-detection mode.
         """
         if not lang:
-            return settings.WHISPER_MODEL_BN, "bn"
+            # Signal auto-detection: use currently loaded model, don't lock language
+            return settings.WHISPER_MODEL_BN, None
 
         l = lang.strip().lower()
         if l in ("hi", "hindi"):
@@ -41,6 +44,20 @@ class AudioTranscriber:
             return settings.WHISPER_MODEL_BN, "bn"
 
         # Default fallback to primary Bengali model
+        return settings.WHISPER_MODEL_BN, l
+
+    def _get_model_for_detected_lang(self, lang_code: str) -> Tuple[str, str]:
+        """
+        Given a detected language code from Whisper, return the best model and normalized code.
+        """
+        l = (lang_code or "").strip().lower()
+        if l in ("en", "english"):
+            return settings.WHISPER_MODEL_EN, "en"
+        elif l in ("hi", "hindi"):
+            return settings.WHISPER_MODEL_HI, "hi"
+        elif l in ("bn", "bengali"):
+            return settings.WHISPER_MODEL_BN, "bn"
+        # For any other language, the Bengali model handles Indic languages best
         return settings.WHISPER_MODEL_BN, l
 
     def initialize_model(self, model_name: Optional[str] = None) -> WhisperModel:
@@ -87,10 +104,52 @@ class AudioTranscriber:
     ) -> Tuple[str, List[Dict[str, Any]], str]:
         """
         Transcribe an audio file into text with timestamps and language handling.
-        Dynamically selects specialized language model and preserves RAM.
+        When language is None, performs a two-phase approach:
+          Phase 1: Auto-detect language using the currently loaded model
+          Phase 2: If detected language needs a different model, swap and re-transcribe
         """
         target_model_name, normalized_lang = self._resolve_model_name_for_lang(language)
         model = self.get_model(target_model_name)
+
+        # Phase 1: Auto-detect language if no explicit language was provided
+        if normalized_lang is None:
+            try:
+                detect_segments, detect_info = model.transcribe(
+                    audio_path,
+                    language=None,  # Let Whisper auto-detect
+                    beam_size=1,    # Fast detection pass
+                    vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500)
+                )
+                # We only need the language detection result, not the full transcription
+                # Consuming 1 segment is enough to trigger the detection
+                try:
+                    next(iter(detect_segments))
+                except StopIteration:
+                    pass
+
+                auto_lang = detect_info.language or "bn"
+                auto_prob = detect_info.language_probability
+                logger.info(
+                    f"Auto-detected language: '{auto_lang}' (confidence: {auto_prob:.2f}) "
+                    f"using model '{target_model_name}'"
+                )
+
+                # Determine the correct specialized model for the detected language
+                correct_model, normalized_lang = self._get_model_for_detected_lang(auto_lang)
+
+                # If a different model is needed, swap to it
+                if correct_model != target_model_name:
+                    logger.info(
+                        f"Detected '{auto_lang}' but loaded model is '{target_model_name}'. "
+                        f"Swapping to specialized model '{correct_model}'..."
+                    )
+                    model = self.get_model(correct_model)
+                    target_model_name = correct_model
+
+            except Exception as detect_err:
+                logger.warning(f"Language auto-detection failed ({detect_err}), defaulting to Bengali.")
+                normalized_lang = "bn"
 
         segments_data = []
         full_text_pieces = []

@@ -77,7 +77,7 @@ def get_effective_cookies_path() -> Optional[str]:
 
     return None
 
-def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
+def get_base_ydl_opts(custom_ua: Optional[str] = None, platform: Optional[str] = None) -> Dict[str, Any]:
     """
     Build hardened yt-dlp options with anti-bot evasion, Node.js EJS challenge solver,
     and optional proxy or cookie authentication.
@@ -99,23 +99,23 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
         # Enable Deno & Node.js JS runtimes for n-sig and signature challenge solving
         'js_runtimes': {'deno': {}, 'node': {}},
         'remote_components': ['ejs:github'],
-        # Android & iOS mobile player clients bypass BotGuard & PO token checks on cloud IPs
-        'extractor_args': {
+    }
+    
+    # Platform-specific configurations
+    if platform == "youtube" or platform is None:
+        opts['extractor_args'] = {
             'youtube': {
                 'player_client': ['android', 'ios'],
             }
-        },
-    }
-    
-    # Check for optional cookies file or environment string
-    cookies_path = get_effective_cookies_path()
-    if cookies_path:
-        opts['cookiefile'] = cookies_path
-        logger.info(f"yt-dlp configured with cookiefile: {cookies_path}")
-        
-    # Check for optional proxy
-    if settings.YT_PROXY:
-        opts['proxy'] = settings.YT_PROXY
+        }
+        cookies_path = get_effective_cookies_path()
+        if cookies_path:
+            opts['cookiefile'] = cookies_path
+            logger.info(f"yt-dlp configured with cookiefile: {cookies_path}")
+            
+        # Proxy is strictly reserved for YouTube to protect social media streams from proxy flakiness
+        if settings.YT_PROXY:
+            opts['proxy'] = settings.YT_PROXY
         
     return opts
 
@@ -652,7 +652,7 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
                 }
 
     # 2. General path: yt-dlp extractor
-    ydl_opts = get_base_ydl_opts()
+    ydl_opts = get_base_ydl_opts(platform=platform)
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -823,14 +823,16 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
       2. If primary fails (e.g. proxy or cookie error), retry direct with clean android options
       3. If YouTube and yt-dlp fails, query Invidious public API instances to fetch audio
     """
+    platform = detect_platform(url)
     output_template = os.path.join(target_dir, "audio.%(ext)s")
-    ydl_opts = get_base_ydl_opts()
+    ydl_opts = get_base_ydl_opts(platform=platform)
     ydl_opts.update({
         'skip_download': False,
         # Universal audio stream priority with low-resolution video fallback
         'format': 'ba/b[height<=360]/b[height<=480]/worst/b',
         'outtmpl': output_template,
         'noplaylist': True,
+        'concurrent_fragment_downloads': 4, # Speeds up Twitter/Facebook m3u8 fragments 4x
     })
     
     # 1. Primary download attempt
@@ -872,14 +874,16 @@ def download_video_for_ocr(url: str, target_dir: str) -> Optional[str]:
     Download a low-resolution (360p or lower) video stream strictly for frame OCR.
     Never downloads 1080p/4K; 360p keeps memory usage under 10MB.
     """
+    platform = detect_platform(url)
     output_template = os.path.join(target_dir, "video_ocr.%(ext)s")
-    ydl_opts = get_base_ydl_opts()
+    ydl_opts = get_base_ydl_opts(platform=platform)
     ydl_opts.update({
         'skip_download': False,
         # Force low-resolution video
         'format': 'bestvideo[height<=360]/worstvideo[ext=mp4]/worst[ext=mp4]/worst',
         'outtmpl': output_template,
         'noplaylist': True,
+        'concurrent_fragment_downloads': 4,
     })
     
     try:

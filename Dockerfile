@@ -41,8 +41,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Pre-download the fine-tuned Bengali Whisper model into the image cache so cold starts are instant (< 1s)
-RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('ammaraldirawi/faster-whisper-small-bn-int8', device='cpu', compute_type='default')"
+# Pre-download fine-tuned Bengali Whisper and multilingual detector into image cache for instant cold starts
+RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('ammaraldirawi/faster-whisper-small-bn-int8', device='cpu', compute_type='default'); WhisperModel('Systran/faster-whisper-tiny', device='cpu', compute_type='default')"
 
 # Copy application source code
 COPY app/ ./app/

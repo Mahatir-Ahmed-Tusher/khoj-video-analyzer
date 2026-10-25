@@ -22,7 +22,7 @@ from app.services.audio_transcriber import transcriber_service
 from app.services.bengali_refiner import bengali_refiner
 from app.services.visual_ocr import extract_on_screen_text
 from app.services.r2_storage import r2_service
-from app.utils.text_cleaner import build_factcheck_summary
+from app.utils.text_cleaner import build_factcheck_summary, format_paragraphs
 from app.utils.cleanup import safe_remove_file, run_garbage_collection
 
 # Configure structured logging
@@ -212,6 +212,10 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
             spoken_transcript = refined_text
             if model_name and model_name != "original_transcript":
                 refiner_model_used = model_name
+    elif spoken_segments and not refiner_model_used:
+        formatted_para = format_paragraphs(spoken_segments)
+        if formatted_para:
+            spoken_transcript = formatted_para
 
     # 3. Synthesize merged content for FactCheckEngine
     merged_summary = build_factcheck_summary(

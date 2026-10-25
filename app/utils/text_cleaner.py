@@ -107,3 +107,54 @@ def build_factcheck_summary(
         sections.append(f"\n[On-Screen Visual Text (Video OCR)]:\n" + "\n".join(screen_lines))
         
     return "\n".join(sections)
+
+def format_paragraphs(segments: List[Dict[str, Any]]) -> str:
+    """
+    Format segments into natural, readable paragraphs inspired by video-to-transcript.
+    Signals:
+      (a) pause gap >= 1.5s between segments
+      (b) discourse topic marker starting a segment once paragraph >= 180 chars
+      (c) paragraph length > 750 chars ending at sentence boundary (. ? ! ।)
+    """
+    if not segments:
+        return ""
+    
+    PAUSE_BREAK_S = 1.5
+    MARKER_MIN_PARA_CHARS = 180
+    MAX_PARA_CHARS = 750
+    TOPIC_MARKERS = (
+        "so ", "so,", "and then", "now ", "now,", "okay", "anyway",
+        "but ", "next ", "alright", "তবে", "সুতরাং", "এদিকে", "এরপর",
+        "কিন্তু", "তাহলে", "আসলে", "তো ", "এখন "
+    )
+    
+    paragraphs, current = [], []
+    cur_len = 0
+    prev_end = None
+    
+    for seg in segments:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        breaks = False
+        if current:
+            gap = float(seg.get("start_seconds", 0) or 0) - (prev_end or 0.0)
+            lowered = text.lower()
+            prev_text = current[-1]
+            if gap >= PAUSE_BREAK_S:
+                breaks = True
+            elif cur_len >= MARKER_MIN_PARA_CHARS and any(lowered.startswith(m) for m in TOPIC_MARKERS):
+                breaks = True
+            elif cur_len > MAX_PARA_CHARS and prev_text.rstrip()[-1:] in ".?!।":
+                breaks = True
+        if breaks:
+            paragraphs.append(" ".join(current))
+            current, cur_len = [], 0
+        current.append(text)
+        cur_len += len(text) + 1
+        prev_end = float(seg.get("end_seconds", 0) or 0)
+        
+    if current:
+        paragraphs.append(" ".join(current))
+    return "\n\n".join(paragraphs).strip()
+

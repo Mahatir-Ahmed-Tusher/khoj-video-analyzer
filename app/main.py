@@ -198,14 +198,16 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
     # Clean up garbage memory immediately
     background_tasks.add_task(run_garbage_collection)
     
-    # 2.5 Bengali LLM Post-Processing Refinement (Nemotron Ultra 550B / Nemotron 3.5 Super VL)
+    # 2.5 Bengali LLM Post-Processing Refinement (Primary: Gemini, Fallback: Nemotron)
     raw_spoken = spoken_transcript
     refiner_model_used = None
-    if detected_lang in ("bn", "bengali") and settings.ENABLE_BENGALI_REFINER and spoken_transcript:
+    is_bengali = bool(detected_lang and any(detected_lang.lower().startswith(prefix) for prefix in ("bn", "ben")))
+    if is_bengali and settings.ENABLE_BENGALI_REFINER and spoken_transcript:
         refined_text, model_name = await bengali_refiner.refine(spoken_transcript)
-        if refined_text and "failed" not in model_name:
+        if refined_text:
             spoken_transcript = refined_text
-            refiner_model_used = model_name
+            if model_name and model_name != "original_transcript":
+                refiner_model_used = model_name
 
     # 3. Synthesize merged content for FactCheckEngine
     merged_summary = build_factcheck_summary(

@@ -151,16 +151,6 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
     }
     
     try:
-        # Build opener with optional proxy support for cloud datacenter environments
-        if settings.YT_PROXY:
-            proxy_handler = urllib.request.ProxyHandler({
-                'http': settings.YT_PROXY,
-                'https': settings.YT_PROXY
-            })
-            opener = urllib.request.build_opener(proxy_handler)
-        else:
-            opener = urllib.request.build_opener()
-
         req = urllib.request.Request(
             player_url,
             data=json.dumps(payload).encode("utf-8"),
@@ -168,9 +158,31 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
             method="POST"
         )
         
-        with opener.open(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            
+        # Try direct connection first (Android mobile client is universally trusted on direct IPs)
+        data = None
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as direct_err:
+            logger.debug(f"Direct InnerTube request failed ({direct_err}). Checking proxy fallback...")
+
+        # If direct failed or returned playability bot challenge, try via proxy if configured
+        if not data or data.get("playabilityStatus", {}).get("status") != "OK":
+            if settings.YT_PROXY:
+                try:
+                    proxy_handler = urllib.request.ProxyHandler({
+                        'http': settings.YT_PROXY,
+                        'https': settings.YT_PROXY
+                    })
+                    opener = urllib.request.build_opener(proxy_handler)
+                    with opener.open(req, timeout=12) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                except Exception as proxy_err:
+                    logger.debug(f"Proxy InnerTube request failed ({proxy_err}).")
+
+        if not data:
+            return {"success": False, "reason": "Failed to connect to YouTube player API."}
+
         playability = data.get("playabilityStatus", {}).get("status")
         if playability != "OK":
             reason = data.get("playabilityStatus", {}).get("reason", "Unknown error")
@@ -205,8 +217,8 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
             
         candidates = []
         if preferred_lang:
-            candidates.append(preferred_lang)
-        candidates.extend(["bn", "bn-BD", "en", "en-US"])
+            candidates.append(preferred_lang.lower())
+        candidates.extend(["bn", "bn-bd", "hi", "en", "en-us"])
         
         selected_track = None
         for cand in candidates:

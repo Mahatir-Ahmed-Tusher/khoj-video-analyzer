@@ -9,6 +9,9 @@ def clean_ocr_text(raw_text: str) -> str:
     """
     if not raw_text:
         return ""
+        
+    if "*[No text detected]*" in raw_text or "No text detected" in raw_text:
+        return ""
     
     # Replace multiple spaces, tabs, or newlines with a single space
     cleaned = re.sub(r'[\r\n\t]+', ' ', raw_text)

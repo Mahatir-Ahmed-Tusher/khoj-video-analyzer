@@ -22,23 +22,30 @@ class Settings(BaseModel):
     PORT: int = int(os.getenv("PORT", "8080"))
     HOST: str = os.getenv("HOST", "0.0.0.0")
     
-    # Whisper Speech-to-Text settings
+    # Whisper Speech-to-Text settings (Single active slot per language)
     WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "ammaraldirawi/faster-whisper-small-bn-int8")
+    WHISPER_MODEL_BN: str = os.getenv("WHISPER_MODEL_BN", "ammaraldirawi/faster-whisper-small-bn-int8")
+    WHISPER_MODEL_HI: str = os.getenv("WHISPER_MODEL_HI", "ammaraldirawi/faster-whisper-small-hi-int8")
+    WHISPER_MODEL_EN: str = os.getenv("WHISPER_MODEL_EN", "Systran/faster-whisper-tiny.en")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cpu")
     WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "default")
     WHISPER_DOWNLOAD_ROOT: str = os.getenv("WHISPER_DOWNLOAD_ROOT", LOCAL_CACHE_DIR)
     WHISPER_CPU_THREADS: int = int(os.getenv("WHISPER_CPU_THREADS", "4"))
     
-    # LLM Bengali Post-Processing (OpenRouter Nemotron)
+    # LLM Bengali Post-Processing (Primary: Google Gemini, Fallback: OpenRouter Nemotron)
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_PRIMARY_MODEL: str = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.5-flash-lite")
+    GEMINI_FALLBACK_MODEL: str = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     NEMOTRON_PRIMARY_MODEL: str = os.getenv("NEMOTRON_PRIMARY_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
     NEMOTRON_FALLBACK_MODEL: str = os.getenv("NEMOTRON_FALLBACK_MODEL", "nvidia/nemotron-3.5-super-vl:free")
     ENABLE_BENGALI_REFINER: bool = os.getenv("ENABLE_BENGALI_REFINER", "true").lower() == "true"
     
-    # Video OCR Settings
+    # Video OCR Settings (Dedicated Bangla OCR Cloudflare Worker Gateway)
+    BANGLA_OCR_API_URL: str = os.getenv("BANGLA_OCR_API_URL", "https://bangla-ocr-api.mahatirtusher.workers.dev/ocr")
     OCR_LANGUAGES: str = os.getenv("OCR_LANGUAGES", "ben+eng")
-    FRAME_SAMPLE_INTERVAL_SECONDS: float = float(os.getenv("FRAME_SAMPLE_INTERVAL_SECONDS", "2.0"))
-    MAX_FRAMES_TO_OCR: int = int(os.getenv("MAX_FRAMES_TO_OCR", "25"))
+    FRAME_SAMPLE_INTERVAL_SECONDS: float = float(os.getenv("FRAME_SAMPLE_INTERVAL_SECONDS", "3.0"))
+    MAX_FRAMES_TO_OCR: int = int(os.getenv("MAX_FRAMES_TO_OCR", "8"))
     
     # Video Guardrail Settings
     MAX_VIDEO_DURATION_SECONDS: int = int(os.getenv("MAX_VIDEO_DURATION_SECONDS", "900"))  # 15 minutes max

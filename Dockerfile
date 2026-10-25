@@ -6,23 +6,24 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8080 \
     HOST=0.0.0.0 \
     WHISPER_MODEL_SIZE=ammaraldirawi/faster-whisper-small-bn-int8 \
+    WHISPER_MODEL_BN=ammaraldirawi/faster-whisper-small-bn-int8 \
+    WHISPER_MODEL_HI=ammaraldirawi/faster-whisper-small-hi-int8 \
+    WHISPER_MODEL_EN=Systran/faster-whisper-tiny.en \
     WHISPER_DEVICE=cpu \
     WHISPER_COMPUTE_TYPE=default \
     WHISPER_CPU_THREADS=2 \
     ENABLE_BENGALI_REFINER=true \
+    GEMINI_PRIMARY_MODEL=gemini-3.5-flash-lite \
+    GEMINI_FALLBACK_MODEL=gemini-flash-lite-latest \
     NEMOTRON_PRIMARY_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free \
     NEMOTRON_FALLBACK_MODEL=nvidia/nemotron-3.5-super-vl:free \
+    BANGLA_OCR_API_URL=https://bangla-ocr-api.mahatirtusher.workers.dev/ocr \
     OCR_LANGUAGES=ben+eng
 
-# Install system dependencies: FFmpeg, Tesseract with Bengali and English packages, and minimal graphics libraries
+# Install system dependencies: FFmpeg, CA certs, Curl, Node.js (Tesseract replaced by Cloudflare Neural OCR Worker)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    tesseract-ocr \
-    tesseract-ocr-ben \
-    tesseract-ocr-eng \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
     ca-certificates \
     curl \
     nodejs \

@@ -814,6 +814,59 @@ def download_youtube_audio_invidious(video_id: str, target_dir: str) -> Optional
             logger.debug(f"Invidious instance {inst} fallback failed: {e}")
     return None
 
+def download_reddit_media_fallback(url: str, target_dir: str, is_video: bool = False) -> Optional[str]:
+    """
+    Fallback resolver for Reddit media when yt-dlp triggers 'Account authentication is required'.
+    Queries rapidsave public API to resolve direct v.redd.it audio or video stream without credentials.
+    """
+    try:
+        encoded_url = urllib.parse.quote(url)
+        info_url = f"https://rapidsave.com/info?url={encoded_url}"
+        req = urllib.request.Request(
+            info_url,
+            headers={"User-Agent": settings.DEFAULT_USER_AGENT}
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+            
+            stream_url = None
+            if not is_video:
+                # Prefer audio-only stream first
+                m_audio = re.search(r'audio_url=(https://v\.redd\.it/[^&"\']+)', html)
+                if not m_audio:
+                    m_audio = re.search(r'(https://v\.redd\.it/[^/]+/(?:CMAF_AUDIO|DASH_audio)[^"\'&]+)', html)
+                if m_audio:
+                    stream_url = urllib.parse.unquote(m_audio.group(1))
+
+            if not stream_url:
+                # Fallback to video stream (which also contains audio or can be used for OCR)
+                m_vid = re.search(r'video_url=(https://v\.redd\.it/[^&"\']+)', html)
+                if not m_vid:
+                    m_vid = re.search(r'(https://v\.redd\.it/[^/]+/(?:CMAF_\d+|DASH_\d+)[^"\'&]+)', html)
+                if m_vid:
+                    stream_url = urllib.parse.unquote(m_vid.group(1))
+
+            if stream_url:
+                prefix = "video_ocr" if is_video else "audio"
+                ext = "mp4" if "mp4" in stream_url else "m4a"
+                out_path = os.path.join(target_dir, f"{prefix}.{ext}")
+                dl_req = urllib.request.Request(
+                    stream_url,
+                    headers={"User-Agent": settings.DEFAULT_USER_AGENT}
+                )
+                with urllib.request.urlopen(dl_req, timeout=25) as dl_resp, open(out_path, "wb") as f:
+                    while True:
+                        chunk = dl_resp.read(128 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+                    logger.info(f"Successfully downloaded Reddit fallback media ({os.path.getsize(out_path)} bytes) -> {out_path}")
+                    return out_path
+    except Exception as ex:
+        logger.warning(f"Reddit media fallback download failed: {ex}")
+    return None
+
 def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
     """
     Download ONLY the lowest bitrate audio stream (32-64kbps).
@@ -822,6 +875,7 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
       1. Primary yt-dlp with android client & anti-bot evasion
       2. If primary fails (e.g. proxy or cookie error), retry direct with clean android options
       3. If YouTube and yt-dlp fails, query Invidious public API instances to fetch audio
+      4. If Reddit and yt-dlp fails, query unauthenticated Reddit stream resolver
     """
     platform = detect_platform(url)
     output_template = os.path.join(target_dir, "audio.%(ext)s")
@@ -867,6 +921,13 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
         if invidious_path:
             return invidious_path
 
+    # 4. For Reddit: fallback to unauthenticated stream resolver
+    if platform == "reddit":
+        logger.info(f"Invoking Reddit audio fallback for {url}...")
+        reddit_path = download_reddit_media_fallback(url, target_dir, is_video=False)
+        if reddit_path:
+            return reddit_path
+
     return None
 
 def download_video_for_ocr(url: str, target_dir: str) -> Optional[str]:
@@ -907,4 +968,10 @@ def download_video_for_ocr(url: str, target_dir: str) -> Optional[str]:
             except Exception as ex2:
                 logger.error(f"Clean retry for OCR video also failed: {ex2}")
         
+    if platform == "reddit":
+        logger.info(f"Invoking Reddit video fallback for OCR on {url}...")
+        reddit_vid = download_reddit_media_fallback(url, target_dir, is_video=True)
+        if reddit_vid:
+            return reddit_vid
+
     return None

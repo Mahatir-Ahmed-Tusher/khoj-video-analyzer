@@ -1,4 +1,4 @@
-# Khoj Video Analyzer (খোঁজ ভিডিও অ্যানালাইজার)
+# Khoj Video Analyzer
 
 > **High-throughput, multilingual video & audio transcription and visual OCR microservice designed for Bengali fact-checking journalism.**
 

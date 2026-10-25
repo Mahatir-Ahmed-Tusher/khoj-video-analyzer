@@ -1,7 +1,7 @@
 import logging
 import gc
 from typing import Dict, Any, List, Tuple, Optional
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, decode_audio
 from app.config import settings
 
 logger = logging.getLogger("khoj-video-analyzer")
@@ -112,26 +112,16 @@ class AudioTranscriber:
         """
         target_model_name, normalized_lang = self._resolve_model_name_for_lang(language)
 
-        # Phase 1: Auto-detect language using unbiased multilingual detector
+        # Phase 1: Rapid unbiased language detection using multilingual detector
         if normalized_lang is None:
             try:
                 # Use lightweight unbiased multilingual detector model (Systran/faster-whisper-tiny, 39MB)
                 # Fine-tuned single-language models (e.g. small-bn-int8) skew logits to 100% Bengali on Indic speech.
                 detector_model = self.get_model("Systran/faster-whisper-tiny")
-                detect_segments, detect_info = detector_model.transcribe(
-                    audio_path,
-                    language=None,  # Let multilingual Whisper detect
-                    beam_size=1,    # Fast detection pass
-                    vad_filter=True,
-                    vad_parameters=dict(min_silence_duration_ms=500)
-                )
-                try:
-                    next(iter(detect_segments))
-                except StopIteration:
-                    pass
+                audio_array = decode_audio(audio_path)
+                auto_lang, auto_prob, _ = detector_model.detect_language(audio_array)
 
-                auto_lang = (detect_info.language or "bn").strip().lower()
-                auto_prob = detect_info.language_probability
+                auto_lang = (auto_lang or "bn").strip().lower()
                 logger.info(
                     f"Multilingual detector identified language: '{auto_lang}' (confidence: {auto_prob:.2f})"
                 )

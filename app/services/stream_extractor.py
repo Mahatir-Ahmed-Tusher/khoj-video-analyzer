@@ -113,9 +113,9 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None, platform: Optional[str] =
             opts['cookiefile'] = cookies_path
             logger.info(f"yt-dlp configured with cookiefile: {cookies_path}")
             
-        # Proxy is strictly reserved for YouTube to protect social media streams from proxy flakiness
-        if settings.YT_PROXY:
-            opts['proxy'] = settings.YT_PROXY
+    # Apply proxy if configured to shield cloud datacenter IPs from bot blocks across all platforms
+    if settings.YT_PROXY:
+        opts['proxy'] = settings.YT_PROXY
         
     return opts
 

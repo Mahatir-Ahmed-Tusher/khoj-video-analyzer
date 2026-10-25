@@ -43,7 +43,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --source . \
   --region "$REGION" \
   --platform managed \
-  --memory 2Gi \
+  --memory 4Gi \
   --cpu 2 \
   --timeout 300 \
   --concurrency 10 \

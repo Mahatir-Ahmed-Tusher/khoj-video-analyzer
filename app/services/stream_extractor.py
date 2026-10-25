@@ -221,62 +221,92 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
             candidates.append(preferred_lang.lower())
         candidates.extend(["bn", "bn-bd", "hi", "en", "en-us"])
         
-        selected_track = None
+        # Order caption tracks by candidate preference
+        ordered_tracks = []
         for cand in candidates:
             for track in caption_tracks:
                 lc = track.get("languageCode", "").lower()
-                if cand == lc or lc.startswith(cand):
-                    selected_track = track
-                    break
-            if selected_track:
-                break
-                
-        if not selected_track:
-            selected_track = caption_tracks[0]
-            
-        base_url = selected_track.get("baseUrl")
-        detected_lang = selected_track.get("languageCode", "unknown")
-        
-        caption_req = urllib.request.Request(base_url, headers={"User-Agent": "Mozilla/5.0"})
-        xml_content = ""
-        # Direct fetch first (signed URL has ip=0.0.0.0 and avoids shared proxy rate-limits)
-        try:
-            with urllib.request.urlopen(caption_req, timeout=10) as c_resp:
-                xml_content = c_resp.read().decode("utf-8", errors="ignore")
-        except Exception as direct_err:
-            logger.info(f"Direct timedtext fetch failed: {direct_err}. Trying via opener/proxy...")
-            with opener.open(caption_req, timeout=12) as c_resp:
-                xml_content = c_resp.read().decode("utf-8", errors="ignore")
-            
-        root = ET.fromstring(xml_content)
+                if (cand == lc or lc.startswith(cand)) and track not in ordered_tracks:
+                    ordered_tracks.append(track)
+        for track in caption_tracks:
+            if track not in ordered_tracks:
+                ordered_tracks.append(track)
+
         segments = []
         text_parts = []
-        
-        for elem in root.findall(".//text"):
-            start = float(elem.attrib.get("start", 0))
-            dur = float(elem.attrib.get("dur", 0))
-            end = round(start + dur, 2)
-            txt = (elem.text or "").strip()
-            txt = re.sub(r'&amp;', '&', txt)
-            txt = re.sub(r'&quot;', '"', txt)
-            txt = re.sub(r'&#39;', "'", txt)
-            txt = re.sub(r'&lt;', '<', txt)
-            txt = re.sub(r'&gt;', '>', txt)
-            if txt:
-                segments.append({"start": start, "end": end, "text": txt})
-                text_parts.append(txt)
-                
-        if not segments:
-            for p in root.findall(".//p"):
-                t_ms = int(p.attrib.get("t", 0))
-                d_ms = int(p.attrib.get("d", 0))
-                start = round(t_ms / 1000.0, 2)
-                end = round((t_ms + d_ms) / 1000.0, 2)
-                p_text = "".join(p.itertext()).strip()
-                if p_text:
-                    segments.append({"start": start, "end": end, "text": p_text})
-                    text_parts.append(p_text)
-                    
+        detected_lang = "unknown"
+
+        proxy_opener = None
+        if settings.YT_PROXY:
+            try:
+                proxy_handler = urllib.request.ProxyHandler({'http': settings.YT_PROXY, 'https': settings.YT_PROXY})
+                proxy_opener = urllib.request.build_opener(proxy_handler)
+            except Exception:
+                pass
+
+        for track in ordered_tracks:
+            lang_code = track.get("languageCode", "unknown")
+            base_url = track.get("baseUrl")
+            if not base_url:
+                continue
+
+            # Strip &fmt=srv3 so YouTube returns standard XML instead of hanging on protobuf
+            clean_url = re.sub(r'&fmt=srv\d*', '', base_url)
+            caption_req = urllib.request.Request(clean_url, headers={"User-Agent": "Mozilla/5.0"})
+            xml_content = ""
+
+            try:
+                with urllib.request.urlopen(caption_req, timeout=5) as c_resp:
+                    xml_content = c_resp.read().decode("utf-8", errors="ignore")
+            except Exception as direct_err:
+                if proxy_opener:
+                    try:
+                        with proxy_opener.open(caption_req, timeout=5) as c_resp:
+                            xml_content = c_resp.read().decode("utf-8", errors="ignore")
+                    except Exception:
+                        pass
+
+            if not xml_content:
+                continue
+
+            try:
+                root = ET.fromstring(xml_content)
+            except ET.ParseError:
+                continue
+
+            track_segments = []
+            track_texts = []
+            for elem in root.findall(".//text"):
+                start = float(elem.attrib.get("start", 0))
+                dur = float(elem.attrib.get("dur", 0))
+                end = round(start + dur, 2)
+                txt = (elem.text or "").strip()
+                txt = re.sub(r'&amp;', '&', txt)
+                txt = re.sub(r'&quot;', '"', txt)
+                txt = re.sub(r'&#39;', "'", txt)
+                txt = re.sub(r'&lt;', '<', txt)
+                txt = re.sub(r'&gt;', '>', txt)
+                if txt:
+                    track_segments.append({"start": start, "end": end, "text": txt})
+                    track_texts.append(txt)
+
+            if not track_segments:
+                for p in root.findall(".//p"):
+                    t_ms = int(p.attrib.get("t", 0))
+                    d_ms = int(p.attrib.get("d", 0))
+                    start = round(t_ms / 1000.0, 2)
+                    end = round((t_ms + d_ms) / 1000.0, 2)
+                    p_text = "".join(p.itertext()).strip()
+                    if p_text:
+                        track_segments.append({"start": start, "end": end, "text": p_text})
+                        track_texts.append(p_text)
+
+            if track_segments:
+                segments = track_segments
+                text_parts = track_texts
+                detected_lang = lang_code
+                break
+
         raw_transcript = " ".join(text_parts)
         return {
             "success": True,

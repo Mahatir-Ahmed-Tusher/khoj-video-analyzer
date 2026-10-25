@@ -93,11 +93,6 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None) -> Dict[str, Any]:
         # Enable Deno & Node.js JS runtimes for n-sig and signature challenge solving
         'js_runtimes': {'deno': {}, 'node': {}},
         'remote_components': ['ejs:github'],
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'web']
-            }
-        }
     }
     
     # Check for optional cookies file or environment string
@@ -191,7 +186,7 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
         details = data.get("videoDetails", {})
         title = details.get("title", "")
         author = details.get("author", "")
-        duration_seconds = int(details.get("lengthSeconds", 0))
+        duration_seconds = int(round(float(details.get("lengthSeconds") or 0)))
         thumbnails = details.get("thumbnail", {}).get("thumbnails", [])
         thumbnail_url = thumbnails[-1].get("url") if thumbnails else None
         
@@ -435,7 +430,7 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
             if not info:
                 raise ValueError("Could not extract video metadata.")
                 
-            duration = info.get('duration', 0)
+            duration = int(round(float(info.get('duration') or 0)))
             title = info.get('title', 'Unknown Title')
             author = info.get('uploader') or info.get('channel') or info.get('creator') or 'Unknown Creator'
             thumbnail = info.get('thumbnail')

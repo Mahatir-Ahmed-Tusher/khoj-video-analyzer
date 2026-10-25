@@ -78,7 +78,7 @@ class VideoAnalyzeResponse(BaseModel):
     video_id: Optional[str] = None
     title: str
     author: str
-    duration_seconds: int
+    duration_seconds: int = 0
     thumbnail_url: Optional[str] = None
     spoken_transcript: str
     raw_spoken_transcript: Optional[str] = None
@@ -135,7 +135,11 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
     metadata = await extract_metadata(url)
     title = metadata.get("title", "Video Claim")
     author = metadata.get("author", platform.capitalize())
-    duration = metadata.get("duration_seconds", 0)
+    raw_duration = metadata.get("duration_seconds", 0)
+    try:
+        duration = int(round(float(raw_duration or 0)))
+    except (ValueError, TypeError):
+        duration = 0
     thumbnail = metadata.get("thumbnail_url")
     
     # Guardrail check: Limit maximum video length to protect Cloud Run compute

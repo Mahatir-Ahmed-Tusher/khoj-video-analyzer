@@ -3,12 +3,18 @@ import re
 import json
 import base64
 import urllib.request
+import urllib.parse
 import xml.etree.ElementTree as ET
 import logging
 from typing import Dict, Any, Optional, Tuple, List
 import yt_dlp
 import httpx
 from bs4 import BeautifulSoup
+
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+except ImportError:
+    YouTubeTranscriptApi = None
 
 from app.config import settings
 
@@ -126,6 +132,141 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
         if match:
             return match.group(1)
     return None
+
+def fetch_youtube_oembed(url: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch public metadata (title, author, thumbnail) from YouTube's official oEmbed API.
+    Fast, reliable, and completely immune to cloud datacenter IP anti-bot blocks.
+    """
+    try:
+        vid = extract_youtube_video_id(url)
+        clean_url = f"https://www.youtube.com/watch?v={vid}" if vid else url
+        oembed_url = f"https://www.youtube.com/oembed?url={urllib.parse.quote(clean_url)}&format=json"
+        req = urllib.request.Request(
+            oembed_url,
+            headers={
+                "User-Agent": settings.DEFAULT_USER_AGENT,
+                "Accept": "application/json"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return {
+                "title": data.get("title", ""),
+                "author": data.get("author_name", "YouTube"),
+                "thumbnail_url": data.get("thumbnail_url")
+            }
+    except Exception as e:
+        logger.warning(f"YouTube oEmbed metadata fetch failed: {e}")
+        return None
+
+def fetch_youtube_transcript_api(video_id: str, preferred_lang: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Fetch YouTube official subtitles or auto-generated captions using youtube-transcript-api.
+    Extracts captions directly from public YouTube timedtext endpoints without bot checks.
+    """
+    if not YouTubeTranscriptApi:
+        logger.warning("youtube-transcript-api is not installed.")
+        return None
+
+    try:
+        ytt = YouTubeTranscriptApi()
+
+        langs = []
+        if preferred_lang:
+            langs.extend([preferred_lang, f"{preferred_lang}-BD", f"{preferred_lang}-IN"])
+        # Priority: Bengali first, then English, then Hindi
+        langs.extend(["bn", "bn-BD", "en", "en-US", "hi"])
+
+        try:
+            transcript_list = ytt.list(video_id)
+            transcript_obj = None
+
+            # 1. Check if preferred or candidate language exists in manual transcripts
+            try:
+                transcript_obj = transcript_list.find_manually_created_transcript(langs)
+            except Exception:
+                pass
+
+            # 2. Check if preferred or candidate language exists in generated transcripts
+            if not transcript_obj:
+                try:
+                    transcript_obj = transcript_list.find_generated_transcript(langs)
+                except Exception:
+                    pass
+
+            # 3. Fallback to any transcript in candidate list
+            if not transcript_obj:
+                try:
+                    transcript_obj = transcript_list.find_transcript(langs)
+                except Exception:
+                    pass
+
+            # 4. Ultimate fallback: pick the first available transcript
+            if not transcript_obj:
+                for t in transcript_list:
+                    transcript_obj = t
+                    break
+
+            if transcript_obj:
+                fetched = transcript_obj.fetch()
+                segments = []
+                text_parts = []
+                for s in fetched:
+                    txt = getattr(s, "text", None) if hasattr(s, "text") else (s.get("text") if isinstance(s, dict) else "")
+                    txt = (txt or "").strip()
+                    if txt:
+                        start = getattr(s, "start", None) if hasattr(s, "start") else (s.get("start") if isinstance(s, dict) else 0.0)
+                        dur = getattr(s, "duration", None) if hasattr(s, "duration") else (s.get("duration") if isinstance(s, dict) else 0.0)
+                        start_sec = round(float(start or 0), 2)
+                        end_sec = round(start_sec + float(dur or 0), 2)
+                        segments.append({"start": start_sec, "end": end_sec, "text": txt})
+                        text_parts.append(txt)
+
+                if segments:
+                    raw_transcript = " ".join(text_parts).strip()
+                    lang = transcript_obj.language_code
+                    logger.info(f"youtube-transcript-api fetched {len(segments)} segments ({len(raw_transcript)} chars, lang={lang}) for {video_id}")
+                    return {
+                        "success": True,
+                        "has_captions": True,
+                        "video_id": video_id,
+                        "raw_transcript": raw_transcript,
+                        "segments": segments,
+                        "detected_language": lang,
+                        "source": "youtube_transcript_api"
+                    }
+        except Exception as list_err:
+            logger.debug(f"transcript_list retrieval failed for {video_id}: {list_err}. Trying direct fetch...")
+            fetched = ytt.fetch(video_id, languages=langs)
+            segments = []
+            text_parts = []
+            for s in fetched:
+                txt = getattr(s, "text", None) if hasattr(s, "text") else (s.get("text") if isinstance(s, dict) else "")
+                txt = (txt or "").strip()
+                if txt:
+                    start = getattr(s, "start", None) if hasattr(s, "start") else (s.get("start") if isinstance(s, dict) else 0.0)
+                    dur = getattr(s, "duration", None) if hasattr(s, "duration") else (s.get("duration") if isinstance(s, dict) else 0.0)
+                    start_sec = round(float(start or 0), 2)
+                    end_sec = round(start_sec + float(dur or 0), 2)
+                    segments.append({"start": start_sec, "end": end_sec, "text": txt})
+                    text_parts.append(txt)
+
+            if segments:
+                raw_transcript = " ".join(text_parts).strip()
+                lang = getattr(fetched, "language_code", None) or getattr(fetched, "language", "unknown")
+                return {
+                    "success": True,
+                    "has_captions": True,
+                    "video_id": video_id,
+                    "raw_transcript": raw_transcript,
+                    "segments": segments,
+                    "detected_language": lang,
+                    "source": "youtube_transcript_api"
+                }
+    except Exception as e:
+        logger.warning(f"fetch_youtube_transcript_api failed for {video_id}: {e}")
+        return None
 
 def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -331,11 +472,22 @@ def fetch_youtube_captions(
 ) -> Optional[Dict[str, Any]]:
     """
     Directly ingest official subtitles or automatic captions from YouTube.
-    First checks InnerTube Android API, then falls back to TimedText scraping.
+    First checks youtube-transcript-api, then InnerTube Android API, then TimedText scraping.
     """
-    # 1. First priority: Direct InnerTube Android client
     vid = extract_youtube_video_id(url)
     if vid:
+        # 1. First priority: youtube-transcript-api (resilient against datacenter IP blocks)
+        ytt_res = fetch_youtube_transcript_api(vid, preferred_lang)
+        if ytt_res and ytt_res.get("has_captions") and ytt_res.get("raw_transcript"):
+            logger.info(f"youtube-transcript-api captions fetched ({len(ytt_res['segments'])} segments, {len(ytt_res['raw_transcript'])} chars)")
+            return {
+                'raw_transcript': ytt_res["raw_transcript"],
+                'segments': ytt_res["segments"],
+                'detected_language': ytt_res["detected_language"],
+                'source': 'youtube_transcript_api'
+            }
+
+        # 2. Secondary fallback: Direct InnerTube Android client
         it_res = fetch_youtube_innertube(vid, preferred_lang)
         if it_res.get("success") and it_res.get("has_captions") and it_res.get("raw_transcript"):
             logger.info(f"InnerTube Android captions fetched ({len(it_res['segments'])} segments, {len(it_res['raw_transcript'])} chars)")
@@ -438,10 +590,36 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
     """
     platform = detect_platform(url)
     
-    # 1. Fast path for YouTube: InnerTube Android API (Instant, BotGuard-free)
+    # 1. Fast, highly resilient path for YouTube: oEmbed + youtube-transcript-api
     if platform == "youtube":
         vid = extract_youtube_video_id(url)
         if vid:
+            # 1a. Fetch metadata from YouTube's official public oEmbed API
+            oembed_data = fetch_youtube_oembed(url)
+            title = (oembed_data.get("title") if oembed_data else None) or "YouTube Video"
+            author = (oembed_data.get("author") if oembed_data else None) or "YouTube Creator"
+            thumb = (oembed_data.get("thumbnail_url") if oembed_data else None) or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+
+            # 1b. Captions via youtube-transcript-api (resilient against datacenter IP blocks)
+            ytt_res = fetch_youtube_transcript_api(vid)
+            if ytt_res and ytt_res.get("has_captions") and ytt_res.get("raw_transcript"):
+                logger.info(f"YouTube transcript and metadata resolved via oEmbed + youtube-transcript-api for video {vid}")
+                segs = ytt_res.get("segments", [])
+                duration = int(round(segs[-1]["end"])) if segs else 0
+                return {
+                    "success": True,
+                    "platform": platform,
+                    "video_id": vid,
+                    "title": title,
+                    "author": author,
+                    "duration_seconds": duration,
+                    "thumbnail_url": thumb,
+                    "existing_subtitles": "[Captions available]",
+                    "_innertube_result": ytt_res,
+                    "_raw_info": None
+                }
+
+            # 1c. InnerTube Android API fallback
             it_res = fetch_youtube_innertube(vid)
             if it_res.get("success"):
                 logger.info(f"InnerTube Android metadata extracted for video {vid} (has_captions: {it_res.get('has_captions')})")
@@ -449,15 +627,30 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
                     "success": True,
                     "platform": platform,
                     "video_id": vid,
-                    "title": it_res.get("title") or "YouTube Video",
-                    "author": it_res.get("author") or "YouTube Creator",
+                    "title": it_res.get("title") or title,
+                    "author": it_res.get("author") or author,
                     "duration_seconds": it_res.get("duration_seconds", 0),
-                    "thumbnail_url": it_res.get("thumbnail_url"),
+                    "thumbnail_url": it_res.get("thumbnail_url") or thumb,
                     "existing_subtitles": "[Captions available]" if it_res.get("has_captions") else "",
                     "_innertube_result": it_res,
                     "_raw_info": None
                 }
-                
+
+            # If oEmbed succeeded even if captions are absent
+            if oembed_data:
+                return {
+                    "success": True,
+                    "platform": platform,
+                    "video_id": vid,
+                    "title": title,
+                    "author": author,
+                    "duration_seconds": 0,
+                    "thumbnail_url": thumb,
+                    "existing_subtitles": "",
+                    "_innertube_result": None,
+                    "_raw_info": None
+                }
+
     # 2. General path: yt-dlp extractor
     ydl_opts = get_base_ydl_opts()
     try:
@@ -483,6 +676,7 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
             return {
                 "success": True,
                 "platform": platform,
+                "video_id": extract_youtube_video_id(url) if platform == "youtube" else None,
                 "title": title,
                 "author": author,
                 "duration_seconds": duration,
@@ -499,6 +693,23 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
     Fallback metadata extractor using social bot User-Agent (matches khoj-content-service).
     Forces Facebook/Meta/Twitter to return SSR OpenGraph metadata.
     """
+    vid = extract_youtube_video_id(url) if platform == "youtube" else None
+
+    # For YouTube, try public oEmbed first before generic HTML scraping
+    if platform == "youtube":
+        oembed = fetch_youtube_oembed(url)
+        if oembed:
+            return {
+                "success": True,
+                "platform": platform,
+                "video_id": vid,
+                "title": oembed.get("title", "YouTube Video"),
+                "author": oembed.get("author", "YouTube Creator"),
+                "duration_seconds": 0,
+                "thumbnail_url": oembed.get("thumbnail_url"),
+                "existing_subtitles": ""
+            }
+
     headers = {
         'User-Agent': settings.SOCIAL_BOT_USER_AGENT,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
@@ -530,6 +741,7 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
                 return {
                     "success": True,
                     "platform": platform,
+                    "video_id": vid,
                     "title": title or "Social Media Video",
                     "author": author or platform.capitalize(),
                     "duration_seconds": 0,
@@ -542,6 +754,7 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
     return {
         "success": False,
         "platform": platform,
+        "video_id": vid,
         "title": "Video Claim",
         "author": platform.capitalize(),
         "duration_seconds": 0,

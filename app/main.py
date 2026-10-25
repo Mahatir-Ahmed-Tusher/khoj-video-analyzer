@@ -222,13 +222,22 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
         on_screen_texts=on_screen_text
     )
     
+    # If duration could not be extracted from metadata, compute from spoken segments
+    if duration == 0 and spoken_segments:
+        try:
+            duration = int(round(float(spoken_segments[-1].get("end") or 0)))
+        except (ValueError, TypeError):
+            pass
+
     elapsed = round(time.time() - start_time, 2)
     logger.info(f"Video analysis completed in {elapsed}s.")
+    
+    resolved_video_id = metadata.get("video_id") or (extract_youtube_video_id(url) if platform == "youtube" else None)
     
     result = VideoAnalyzeResponse(
         success=True,
         platform=platform,
-        video_id=None,
+        video_id=resolved_video_id,
         title=title,
         author=author,
         duration_seconds=duration,

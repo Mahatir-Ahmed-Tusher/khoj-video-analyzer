@@ -57,7 +57,7 @@ class TestKhojVideoAnalyzer(unittest.TestCase):
         self.assertEqual(deduped[1]["end"], "00:12")
         self.assertIn("সরাসরি ঢাকা", deduped[1]["text"])
         
-        # Test summary synthesis
+        # Test summary synthesis without source caption
         summary = build_factcheck_summary(
             title="Viral Claim Video",
             platform="youtube",
@@ -68,7 +68,20 @@ class TestKhojVideoAnalyzer(unittest.TestCase):
         self.assertIn("Video Title: Viral Claim Video", summary)
         self.assertIn("Spoken Transcript", summary)
         self.assertIn("ব্রেকিং নিউজ", summary)
-        print("[PASS] OCR text cleaning, fuzzy frame deduplication, and factcheck synthesis verified.")
+        self.assertNotIn("Information about that video collected from the source:", summary)
+
+        # Test summary synthesis with source_caption
+        summary_with_caption = build_factcheck_summary(
+            title="Viral Claim Video",
+            platform="instagram",
+            author="Test Creator",
+            spoken_transcript="",
+            on_screen_texts=[],
+            source_caption="This video proves the new policy is active from tomorrow!"
+        )
+        self.assertIn("Information about that video collected from the source:", summary_with_caption)
+        self.assertIn("This video proves the new policy is active from tomorrow!", summary_with_caption)
+        print("[PASS] OCR text cleaning, fuzzy frame deduplication, source caption, and factcheck synthesis verified.")
 
     def test_04_fastapi_app_initialization(self):
         from app.main import app

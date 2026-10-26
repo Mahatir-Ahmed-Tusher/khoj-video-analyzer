@@ -393,6 +393,8 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
         duration_seconds = int(round(float(details.get("lengthSeconds") or 0)))
         thumbnails = details.get("thumbnail", {}).get("thumbnails", [])
         thumbnail_url = thumbnails[-1].get("url") if thumbnails else None
+        short_desc = (details.get("shortDescription") or "").strip()
+        source_caption = short_desc if short_desc else None
         
         caption_tracks = (
             data.get("captions", {})
@@ -409,6 +411,7 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
                 "author": author,
                 "duration_seconds": duration_seconds,
                 "thumbnail_url": thumbnail_url,
+                "source_caption": source_caption,
                 "raw_transcript": None,
                 "segments": [],
                 "detected_language": "unknown"
@@ -516,6 +519,7 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
             "author": author,
             "duration_seconds": duration_seconds,
             "thumbnail_url": thumbnail_url,
+            "source_caption": source_caption,
             "raw_transcript": raw_transcript if segments else None,
             "segments": segments,
             "detected_language": detected_lang
@@ -673,6 +677,7 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
                     "author": author,
                     "duration_seconds": duration,
                     "thumbnail_url": thumb,
+                    "source_caption": None,
                     "existing_subtitles": "[Captions available]",
                     "_innertube_result": ytt_res,
                     "_raw_info": None
@@ -690,6 +695,7 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
                     "author": it_res.get("author") or author,
                     "duration_seconds": it_res.get("duration_seconds", 0),
                     "thumbnail_url": it_res.get("thumbnail_url") or thumb,
+                    "source_caption": it_res.get("source_caption"),
                     "existing_subtitles": "[Captions available]" if it_res.get("has_captions") else "",
                     "_innertube_result": it_res,
                     "_raw_info": None
@@ -705,6 +711,7 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
                     "author": author,
                     "duration_seconds": 0,
                     "thumbnail_url": thumb,
+                    "source_caption": None,
                     "existing_subtitles": "",
                     "_innertube_result": None,
                     "_raw_info": None
@@ -722,6 +729,8 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
             title = info.get('title', 'Unknown Title')
             author = info.get('uploader') or info.get('channel') or info.get('creator') or 'Unknown Creator'
             thumbnail = info.get('thumbnail')
+            raw_desc = (info.get('description') or '').strip()
+            source_caption = raw_desc if (raw_desc and raw_desc.lower() not in _BLOCKED_PAGE_TITLES) else None
             
             # Extract existing subtitles if available (bypasses audio transcription when present)
             existing_subtitles = ""
@@ -740,6 +749,7 @@ async def extract_metadata(url: str) -> Dict[str, Any]:
                 "author": author,
                 "duration_seconds": duration,
                 "thumbnail_url": thumbnail,
+                "source_caption": source_caption,
                 "existing_subtitles": existing_subtitles,
                 "_raw_info": info
             }
@@ -766,6 +776,7 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
                 "author": oembed.get("author", "YouTube Creator"),
                 "duration_seconds": 0,
                 "thumbnail_url": oembed.get("thumbnail_url"),
+                "source_caption": None,
                 "existing_subtitles": ""
             }
 
@@ -802,6 +813,7 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
                         "author": platform.capitalize(),
                         "duration_seconds": 0,
                         "thumbnail_url": None,
+                        "source_caption": None,
                         "existing_subtitles": "",
                     }
 
@@ -814,6 +826,13 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
                 og_img = soup.find('meta', property='og:image')
                 if og_img and og_img.get('content'):
                     thumbnail = og_img['content'].strip()
+
+                source_caption = None
+                og_desc = soup.find('meta', property='og:description') or soup.find('meta', attrs={'name': 'description'})
+                if og_desc and og_desc.get('content'):
+                    c_text = og_desc['content'].strip()
+                    if c_text and c_text.lower() not in _BLOCKED_PAGE_TITLES:
+                        source_caption = c_text
                     
                 return {
                     "success": True,
@@ -823,6 +842,7 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
                     "author": author or platform.capitalize(),
                     "duration_seconds": 0,
                     "thumbnail_url": thumbnail,
+                    "source_caption": source_caption,
                     "existing_subtitles": ""
                 }
     except Exception as ex:
@@ -836,6 +856,7 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
         "author": platform.capitalize(),
         "duration_seconds": 0,
         "thumbnail_url": None,
+        "source_caption": None,
         "existing_subtitles": ""
     }
 

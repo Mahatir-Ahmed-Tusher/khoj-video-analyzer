@@ -80,6 +80,7 @@ class TranscribeResponse(BaseModel):
     author: str
     duration_seconds: int = 0
     thumbnail_url: Optional[str] = None
+    source_caption: Optional[str] = None
     spoken_transcript: str
     raw_spoken_transcript: Optional[str] = None
     refiner_model: Optional[str] = None
@@ -101,6 +102,7 @@ class OcrResponse(BaseModel):
     author: str
     duration_seconds: int = 0
     thumbnail_url: Optional[str] = None
+    source_caption: Optional[str] = None
     on_screen_text: List[Dict[str, Any]]
     combined_visual_text: str
     frames_analyzed: int = 0
@@ -121,6 +123,7 @@ class VideoAnalyzeResponse(BaseModel):
     author: str
     duration_seconds: int = 0
     thumbnail_url: Optional[str] = None
+    source_caption: Optional[str] = None
     spoken_transcript: str
     raw_spoken_transcript: Optional[str] = None
     refiner_model: Optional[str] = None
@@ -287,6 +290,7 @@ async def transcribe_video_url(req: TranscribeRequest, background_tasks: Backgro
     except (ValueError, TypeError):
         duration = 0
     thumbnail = metadata.get("thumbnail_url")
+    source_caption = metadata.get("source_caption")
 
     with tempfile.TemporaryDirectory() as temp_dir:
         spoken_transcript, raw_spoken, refiner_model_used, spoken_segments, detected_lang, audio_download_succeeded = (
@@ -312,6 +316,7 @@ async def transcribe_video_url(req: TranscribeRequest, background_tasks: Backgro
         author=author,
         duration_seconds=duration,
         thumbnail_url=thumbnail,
+        source_caption=source_caption,
         spoken_transcript=spoken_transcript,
         raw_spoken_transcript=raw_spoken if refiner_model_used else spoken_transcript,
         refiner_model=refiner_model_used,
@@ -351,6 +356,7 @@ async def extract_video_ocr(req: OcrRequest, background_tasks: BackgroundTasks):
     except (ValueError, TypeError):
         duration = 0
     thumbnail = metadata.get("thumbnail_url")
+    source_caption = metadata.get("source_caption")
 
     with tempfile.TemporaryDirectory() as temp_dir:
         on_screen_text = await _perform_visual_ocr(
@@ -374,6 +380,7 @@ async def extract_video_ocr(req: OcrRequest, background_tasks: BackgroundTasks):
         author=author,
         duration_seconds=duration,
         thumbnail_url=thumbnail,
+        source_caption=source_caption,
         on_screen_text=on_screen_text,
         combined_visual_text=combined_visual_text,
         frames_analyzed=len(on_screen_text),
@@ -410,6 +417,7 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
     except (ValueError, TypeError):
         duration = 0
     thumbnail = metadata.get("thumbnail_url")
+    source_caption = metadata.get("source_caption")
     
     spoken_transcript = ""
     raw_spoken = ""
@@ -478,7 +486,8 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
         platform=platform,
         author=author,
         spoken_transcript=spoken_transcript,
-        on_screen_texts=on_screen_text
+        on_screen_texts=on_screen_text,
+        source_caption=source_caption
     )
     
     if duration == 0 and spoken_segments:
@@ -500,6 +509,7 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
         author=author,
         duration_seconds=duration,
         thumbnail_url=thumbnail,
+        source_caption=source_caption,
         spoken_transcript=spoken_transcript,
         raw_spoken_transcript=raw_spoken if refiner_model_used else spoken_transcript,
         refiner_model=refiner_model_used,

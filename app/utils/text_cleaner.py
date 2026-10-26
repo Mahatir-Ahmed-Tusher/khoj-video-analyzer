@@ -1,6 +1,6 @@
 import re
 from difflib import SequenceMatcher
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 def clean_ocr_text(raw_text: str) -> str:
     """
@@ -83,11 +83,13 @@ def build_factcheck_summary(
     platform: str,
     author: str,
     spoken_transcript: str,
-    on_screen_texts: List[Dict[str, Any]]
+    on_screen_texts: List[Dict[str, Any]],
+    source_caption: Optional[str] = None
 ) -> str:
     """
-    Synthesize spoken audio transcript and visual on-screen texts into
-    a unified context summary formatted for the Khoj fact-checking engine.
+    Synthesize video title, source caption, spoken audio transcript,
+    and visual on-screen texts into a unified context summary formatted
+    for the Khoj fact-checking engine.
     """
     sections = []
     
@@ -95,6 +97,8 @@ def build_factcheck_summary(
         sections.append(f"Video Title: {title}")
     if author:
         sections.append(f"Source/Author: {author} ({platform.capitalize()})")
+    if source_caption and source_caption.strip():
+        sections.append(f"\nInformation about that video collected from the source:\n{source_caption.strip()}")
         
     if spoken_transcript and spoken_transcript.strip():
         sections.append(f"\n[Spoken Transcript (Audio)]:\n{spoken_transcript.strip()}")

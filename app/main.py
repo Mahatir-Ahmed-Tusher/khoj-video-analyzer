@@ -17,7 +17,8 @@ from app.services.stream_extractor import (
     download_video_for_ocr,
     detect_platform,
     fetch_youtube_captions,
-    extract_youtube_video_id
+    extract_youtube_video_id,
+    get_effective_cookies_path
 )
 from app.services.audio_transcriber import transcriber_service
 from app.services.bengali_refiner import bengali_refiner
@@ -152,11 +153,14 @@ async def health_check():
     """
     Instant health check endpoint for Google Cloud Run liveness & readiness probes.
     """
+    cookies_path = get_effective_cookies_path()
     return {
         "status": "healthy",
         "service": settings.SERVICE_NAME,
         "whisper_model": settings.WHISPER_MODEL_SIZE,
+        "whisper_compute_type": settings.WHISPER_COMPUTE_TYPE,
         "ocr_languages": settings.OCR_LANGUAGES,
+        "cookies": f"loaded ({os.path.getsize(cookies_path)} bytes)" if cookies_path and os.path.exists(cookies_path) else "not_configured",
         "r2_storage": "configured (ephemeral/auto-delete)" if r2_service.is_configured() else "not_configured"
     }
 

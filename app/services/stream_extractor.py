@@ -128,7 +128,8 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None, platform: Optional[str] =
     if platform == "youtube" or platform is None:
         opts['extractor_args'] = {
             'youtube': {
-                'player_client': ['android', 'web', 'mweb'],
+                'player_client': ['android'],
+                'player_skip': ['web', 'mweb'],
             }
         }
         pot_url = getattr(settings, 'POT_SERVER', 'http://127.0.0.1:4416')
@@ -199,7 +200,21 @@ def fetch_youtube_transcript_api(video_id: str, preferred_lang: Optional[str] = 
         return None
 
     try:
-        ytt = YouTubeTranscriptApi()
+        session = None
+        cookies_path = get_effective_cookies_path()
+        if cookies_path and os.path.exists(cookies_path):
+            try:
+                import http.cookiejar
+                import requests
+                session = requests.Session()
+                cj = http.cookiejar.MozillaCookieJar(cookies_path)
+                cj.load(ignore_discard=True, ignore_expires=True)
+                session.cookies = cj
+            except Exception as cj_err:
+                logger.warning(f"Could not load cookies into transcript session: {cj_err}")
+                session = None
+
+        ytt = YouTubeTranscriptApi(http_client=session)
 
         langs = []
         if preferred_lang:
@@ -329,27 +344,35 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
             method="POST"
         )
         
-        # Try direct connection first (Android mobile client is universally trusted on direct IPs)
+        # Build unified opener with cookies and proxy if available
+        handlers = []
+        cookies_path = get_effective_cookies_path()
+        if cookies_path and os.path.exists(cookies_path):
+            try:
+                import http.cookiejar
+                cj = http.cookiejar.MozillaCookieJar(cookies_path)
+                cj.load(ignore_discard=True, ignore_expires=True)
+                handlers.append(urllib.request.HTTPCookieProcessor(cj))
+            except Exception as e:
+                logger.debug(f"Could not load cookies for InnerTube: {e}")
+
+        if settings.YT_PROXY:
+            try:
+                handlers.append(urllib.request.ProxyHandler({
+                    'http': settings.YT_PROXY,
+                    'https': settings.YT_PROXY
+                }))
+            except Exception:
+                pass
+
+        opener = urllib.request.build_opener(*handlers) if handlers else urllib.request.build_opener()
+
         data = None
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with opener.open(req, timeout=12) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as direct_err:
-            logger.debug(f"Direct InnerTube request failed ({direct_err}). Checking proxy fallback...")
-
-        # If direct failed or returned playability bot challenge, try via proxy if configured
-        if not data or data.get("playabilityStatus", {}).get("status") != "OK":
-            if settings.YT_PROXY:
-                try:
-                    proxy_handler = urllib.request.ProxyHandler({
-                        'http': settings.YT_PROXY,
-                        'https': settings.YT_PROXY
-                    })
-                    opener = urllib.request.build_opener(proxy_handler)
-                    with opener.open(req, timeout=12) as resp:
-                        data = json.loads(resp.read().decode("utf-8"))
-                except Exception as proxy_err:
-                    logger.debug(f"Proxy InnerTube request failed ({proxy_err}).")
+            logger.debug(f"InnerTube request failed ({direct_err}).")
 
         if not data:
             return {"success": False, "reason": "Failed to connect to YouTube player API."}
@@ -422,19 +445,21 @@ def fetch_youtube_innertube(video_id: str, preferred_lang: Optional[str] = None)
 
             # Strip &fmt=srv3 so YouTube returns standard XML instead of hanging on protobuf
             clean_url = re.sub(r'&fmt=srv\d*', '', base_url)
-            caption_req = urllib.request.Request(clean_url, headers={"User-Agent": "Mozilla/5.0"})
+            caption_req = urllib.request.Request(
+                clean_url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Referer": "https://www.youtube.com/",
+                    "Origin": "https://www.youtube.com"
+                }
+            )
             xml_content = ""
 
             try:
-                with urllib.request.urlopen(caption_req, timeout=5) as c_resp:
+                with opener.open(caption_req, timeout=8) as c_resp:
                     xml_content = c_resp.read().decode("utf-8", errors="ignore")
             except Exception as direct_err:
-                if proxy_opener:
-                    try:
-                        with proxy_opener.open(caption_req, timeout=5) as c_resp:
-                            xml_content = c_resp.read().decode("utf-8", errors="ignore")
-                    except Exception:
-                        pass
+                logger.debug(f"Caption track download failed: {direct_err}")
 
             if not xml_content:
                 continue
@@ -829,7 +854,7 @@ def download_youtube_audio_invidious(video_id: str, target_dir: str) -> Optional
                     "Accept": "application/json"
                 }
             )
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 adaptive = data.get("adaptiveFormats", [])
                 audio = [f for f in adaptive if f.get("type", "").startswith("audio/") and f.get("url")]
@@ -937,8 +962,8 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
     ydl_opts = get_base_ydl_opts(platform=platform)
     ydl_opts.update({
         'skip_download': False,
-        # Universal audio stream priority with low-resolution video fallback
-        'format': 'ba/b[height<=360]/b[height<=480]/worst/b',
+        # Universal audio stream priority with low-resolution video fallback (supports vertical shorts/reels)
+        'format': 'ba/b[height<=480]/b[height<=720]/b/worst',
         'outtmpl': output_template,
         'noplaylist': True,
         'concurrent_fragment_downloads': 4, # Speeds up Twitter/Facebook m3u8 fragments 4x
@@ -962,11 +987,11 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
             clean_opts.pop('proxy', None)
             if platform == "youtube":
                 clean_opts['extractor_args'] = {
-                    'youtube': {'player_client': ['web', 'mweb', 'android']}
+                    'youtube': {
+                        'player_client': ['android'],
+                        'player_skip': ['web', 'mweb'],
+                    }
                 }
-                pot_url = getattr(settings, 'POT_SERVER', 'http://127.0.0.1:4416')
-                if pot_server_reachable(pot_url):
-                    clean_opts['extractor_args']['youtubepot-bgutilhttp'] = {'base_url': [pot_url]}
             with yt_dlp.YoutubeDL(clean_opts) as ydl:
                 ydl.extract_info(url, download=True)
                 for file in os.listdir(target_dir):
@@ -1002,8 +1027,8 @@ def download_video_for_ocr(url: str, target_dir: str) -> Optional[str]:
     ydl_opts = get_base_ydl_opts(platform=platform)
     ydl_opts.update({
         'skip_download': False,
-        # Force low-resolution video
-        'format': 'bestvideo[height<=360]/worstvideo[ext=mp4]/worst[ext=mp4]/worst',
+        # Force low-resolution video (supports vertical shorts 360x640 / 720p)
+        'format': 'bestvideo[height<=720]/bestvideo[height<=480]/worstvideo[ext=mp4]/worst[ext=mp4]/worst',
         'outtmpl': output_template,
         'noplaylist': True,
         'concurrent_fragment_downloads': 4,

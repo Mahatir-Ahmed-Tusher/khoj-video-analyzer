@@ -77,7 +77,11 @@ class TestKhojVideoAnalyzer(unittest.TestCase):
         self.assertIn("/health", routes)
         self.assertIn("/analyze", routes)
         self.assertIn("/analyze/upload", routes)
-        print("[PASS] FastAPI app initialized with all required endpoints: /, /health, /analyze, /analyze/upload.")
+        self.assertIn("/transcribe", routes)
+        self.assertIn("/transcribe/upload", routes)
+        self.assertIn("/ocr", routes)
+        self.assertIn("/ocr/upload", routes)
+        print("[PASS] FastAPI app initialized with all endpoints: /, /health, /analyze, /transcribe, /ocr, /upload variants.")
 
     def test_05_modules_and_dependencies(self):
         import yt_dlp
@@ -88,6 +92,27 @@ class TestKhojVideoAnalyzer(unittest.TestCase):
         import httpx
         import bs4
         print("[PASS] Core AI and processing libraries (yt-dlp, faster-whisper, opencv, pytesseract, httpx) verified.")
+
+    def test_06_fastapi_endpoints_testclient(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        client = TestClient(app)
+        
+        # Test Root Catalog
+        res_root = client.get("/")
+        self.assertEqual(res_root.status_code, 200)
+        catalog = res_root.json()
+        self.assertEqual(catalog.get("service"), "khoj-video-analyzer")
+        self.assertIn("transcribe", catalog.get("endpoints", {}))
+        self.assertIn("ocr", catalog.get("endpoints", {}))
+        self.assertIn("analyze", catalog.get("endpoints", {}))
+        
+        # Test Health Endpoint
+        res_health = client.get("/health")
+        self.assertEqual(res_health.status_code, 200)
+        health = res_health.json()
+        self.assertEqual(health.get("status"), "healthy")
+        print("[PASS] FastAPI TestClient verified root catalog and health check endpoints.")
 
 if __name__ == "__main__":
     unittest.main()

@@ -158,62 +158,51 @@ docker run -p 8080:8080 --env-file .env khoj-video-analyzer
 
 ## API Reference
 
-### 1. Analyze Video URL
-Transcribes dialogue and extracts on-screen OCR text from a social media or direct video URL.
+### 1. Dedicated Speech-to-Text (`POST /transcribe`)
+Downloads **ONLY** the audio stream and runs Faster-Whisper + Gemini Bengali refiner. Zero video download, zero visual OCR for maximum throughput and speed (~10-25s).
 
-- **Endpoint**: `POST /analyze`
-- **Headers**: `Content-Type: application/json`
+- **Endpoint**: `POST /transcribe`
 - **Body**:
   ```json
   {
-    "url": "https://youtu.be/TE5ZJB-6gVE?si=taPo9aoUIIHLGU-a",
-    "extract_ocr": true
+    "url": "https://youtube.com/shorts/tQf4koxUjZs",
+    "language": null
   }
   ```
-- **Response**:
+- **Direct Upload**: `POST /transcribe/upload` (multipart/form-data with `file`)
+
+### 2. Dedicated On-Screen Visual OCR (`POST /ocr`)
+Downloads 360p lightweight video and extracts on-screen text overlays and banners across 16-24 sampled frames. Zero audio download, zero Whisper speech execution.
+
+- **Endpoint**: `POST /ocr`
+- **Body**:
   ```json
   {
-    "success": true,
-    "title": "এআই (AI) কি সত্যিই ব্ল্যাক ম্যাজিক?",
-    "author": "Khoj - AI Bengali Factchecker",
-    "platform": "youtube",
-    "duration_seconds": 48.0,
-    "detected_language": "bn",
-    "spoken_transcript": "কুন্যাল, এই কোর্সটি রইল? এত চ্যাটজিপিটি যেকোনো করছিলাম... আসলে কি এটাকে ব্ল্যাক ম্যাজিক বা দারিদ্রদের আলামত?...",
-    "raw_spoken_transcript": "কুন্যাল, এই কোর্চিস রয়েন? এত চেজিবিটি ইয়েকের করছেলাম... আসুদেইকে ইয়ায়েকে ব্ল্যাক মেজিক বা দারজাদের আলামত?...",
-    "refiner_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "timestamped_segments": [
-      {
-        "start": "00:06",
-        "end": "00:08",
-        "start_seconds": 6.51,
-        "end_seconds": 8.51,
-        "text": "কুন্যাল, এই কোর্চিস রয়েন?"
-      }
-    ],
-    "on_screen_text": "এআই কি সত্যি ব্ল্যাক ম্যাজিক?",
-    "ocr_frames_analyzed": 24,
-    "processing_time_seconds": 32.14
+    "url": "https://www.facebook.com/share/r/1Et9iC3U9L/",
+    "max_frames": 16,
+    "interval_seconds": 2.5
   }
   ```
+- **Direct Upload**: `POST /ocr/upload` (multipart/form-data with `file`)
 
-### 2. Transcribe Audio File
-Uploads an audio file directly (`.mp3`, `.m4a`, `.wav`, `.aac`) for fast speech-to-text transcription.
+### 3. Full Multi-Modal Analysis (`POST /analyze`)
+Composite pipeline combining speech transcription, on-screen OCR, and unified fact-check summary synthesis.
 
-- **Endpoint**: `POST /transcribe-audio`
-- **Content-Type**: `multipart/form-data`
-- **Form Param**: `file` (Binary audio data)
-
-### 3. Health Check
-- **Endpoint**: `GET /health`
-- **Response**:
+- **Endpoint**: `POST /analyze`
+- **Body**:
   ```json
   {
-    "status": "healthy",
-    "model_loaded": true,
-    "refiner_enabled": true
+    "url": "https://youtu.be/TE5ZJB-6gVE",
+    "extract_audio": true,
+    "extract_ocr": true,
+    "language": null
   }
   ```
+- **Direct Upload**: `POST /analyze/upload` (multipart/form-data with `file`)
+
+### 4. Health & Service Catalog
+- **Root Catalog**: `GET /` (lists all available endpoints and API metadata)
+- **Health Probe**: `GET /health` (returns engine status and model configurations)
 
 ---
 

@@ -28,7 +28,7 @@ class Settings(BaseModel):
     WHISPER_MODEL_HI: str = os.getenv("WHISPER_MODEL_HI", "ammaraldirawi/faster-whisper-small-hi-int8")
     WHISPER_MODEL_EN: str = os.getenv("WHISPER_MODEL_EN", "Systran/faster-whisper-tiny.en")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cpu")
-    WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "default")
+    WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
     WHISPER_DOWNLOAD_ROOT: str = os.getenv("WHISPER_DOWNLOAD_ROOT", LOCAL_CACHE_DIR)
     WHISPER_CPU_THREADS: int = int(os.getenv("WHISPER_CPU_THREADS", "4"))
     

@@ -169,7 +169,8 @@ async def _perform_audio_transcription(
     platform: str,
     metadata: Dict[str, Any],
     req_language: Optional[str],
-    temp_dir: str
+    temp_dir: str,
+    existing_media_path: Optional[str] = None
 ) -> Tuple[str, str, Optional[str], List[Dict[str, Any]], str, bool]:
     spoken_transcript = ""
     spoken_segments = []
@@ -184,6 +185,7 @@ async def _perform_audio_transcription(
             spoken_transcript = innertube_data["raw_transcript"]
             spoken_segments = innertube_data["segments"]
             detected_lang = innertube_data["detected_language"]
+            audio_download_succeeded = True
             logger.info(f"YouTube transcript instantly ingested via InnerTube metadata cache ({len(spoken_segments)} segments).")
         else:
             caption_result = await asyncio.to_thread(fetch_youtube_captions, url, req_language, metadata.get("_raw_info"))
@@ -191,20 +193,25 @@ async def _perform_audio_transcription(
                 spoken_transcript = caption_result["raw_transcript"]
                 spoken_segments = caption_result["segments"]
                 detected_lang = caption_result["detected_language"]
+                audio_download_succeeded = True
                 logger.info(f"YouTube transcript successfully ingested via {caption_result['source']} ({len(spoken_segments)} segments).")
 
-    # If captions not available or non-YouTube platform, proceed to audio stream download
+    # If captions not available or non-YouTube platform, proceed to audio stream
     if not spoken_transcript:
-        audio_path = await asyncio.to_thread(download_audio_stream, url, temp_dir)
+        audio_path = existing_media_path
+        if not audio_path:
+            audio_path = await asyncio.to_thread(download_audio_stream, url, temp_dir)
+
         if audio_path and os.path.exists(audio_path):
             audio_download_succeeded = True
-            logger.info(f"Audio stream downloaded ({os.path.getsize(audio_path) / 1024:.1f} KB). Starting Whisper transcription...")
+            logger.info(f"Audio media stream ready ({os.path.getsize(audio_path) / 1024:.1f} KB). Starting Whisper transcription...")
             spoken_transcript, spoken_segments, detected_lang = await asyncio.to_thread(
                 transcriber_service.transcribe,
                 audio_path,
                 req_language
             )
-            safe_remove_file(audio_path)
+            if audio_path != existing_media_path:
+                safe_remove_file(audio_path)
         else:
             logger.warning("Could not obtain audio stream. Skipping speech transcription.")
 
@@ -234,18 +241,23 @@ async def _perform_visual_ocr(
     url: str,
     temp_dir: str,
     interval_seconds: Optional[float] = None,
-    max_frames: Optional[int] = None
+    max_frames: Optional[int] = None,
+    existing_video_path: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    video_ocr_path = await asyncio.to_thread(download_video_for_ocr, url, temp_dir)
+    video_ocr_path = existing_video_path
+    if not video_ocr_path:
+        video_ocr_path = await asyncio.to_thread(download_video_for_ocr, url, temp_dir)
+
     if video_ocr_path and os.path.exists(video_ocr_path):
-        logger.info(f"OCR video stream downloaded ({os.path.getsize(video_ocr_path) / (1024*1024):.1f} MB). Starting visual frame OCR...")
+        logger.info(f"OCR video stream ready ({os.path.getsize(video_ocr_path) / (1024*1024):.1f} MB). Starting visual frame OCR...")
         on_screen_text = await asyncio.to_thread(
             extract_on_screen_text,
             video_ocr_path,
             interval_seconds,
             max_frames
         )
-        safe_remove_file(video_ocr_path)
+        if video_ocr_path != existing_video_path:
+            safe_remove_file(video_ocr_path)
         return on_screen_text
     else:
         logger.warning("Could not obtain video stream for OCR.")
@@ -409,12 +421,52 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
     
     with tempfile.TemporaryDirectory() as temp_dir:
         try:
-            if req.extract_audio:
+            if req.extract_audio and req.extract_ocr:
+                # Composite optimization: Check for instant YouTube captions first
+                yt_captions = None
+                if platform == "youtube":
+                    innertube_data = metadata.get("_innertube_result")
+                    if innertube_data and innertube_data.get("has_captions") and innertube_data.get("raw_transcript"):
+                        yt_captions = innertube_data
+                    else:
+                        yt_captions = await asyncio.to_thread(fetch_youtube_captions, url, req.language, metadata.get("_raw_info"))
+
+                if yt_captions and yt_captions.get("raw_transcript"):
+                    # Instant path: Captions already present, only download 360p video for OCR
+                    spoken_transcript = yt_captions["raw_transcript"]
+                    raw_spoken = spoken_transcript
+                    spoken_segments = yt_captions.get("segments", [])
+                    detected_lang = yt_captions.get("detected_language", "unknown")
+                    audio_download_succeeded = True
+                    on_screen_text = await _perform_visual_ocr(url, temp_dir)
+                else:
+                    # Single unified download of 360p video stream containing both video frames and audio track.
+                    # Eliminates secondary download platform anti-bot triggers and cuts network time by 50%.
+                    unified_video = await asyncio.to_thread(download_video_for_ocr, url, temp_dir)
+                    if unified_video and os.path.exists(unified_video):
+                        audio_download_succeeded = True
+                        logger.info(f"Unified media stream ready ({os.path.getsize(unified_video) / 1024:.1f} KB). Running Whisper & OCR concurrently...")
+                        audio_task = _perform_audio_transcription(
+                            url, platform, metadata, req.language, temp_dir, existing_media_path=unified_video
+                        )
+                        ocr_task = _perform_visual_ocr(
+                            url, temp_dir, existing_video_path=unified_video
+                        )
+                        (spoken_res, ocr_res) = await asyncio.gather(audio_task, ocr_task)
+                        spoken_transcript, raw_spoken, refiner_model_used, spoken_segments, detected_lang, _ = spoken_res
+                        on_screen_text = ocr_res
+                        safe_remove_file(unified_video)
+                    else:
+                        # Fallback to independent calls if unified download failed
+                        spoken_transcript, raw_spoken, refiner_model_used, spoken_segments, detected_lang, audio_download_succeeded = (
+                            await _perform_audio_transcription(url, platform, metadata, req.language, temp_dir)
+                        )
+                        on_screen_text = await _perform_visual_ocr(url, temp_dir)
+            elif req.extract_audio:
                 spoken_transcript, raw_spoken, refiner_model_used, spoken_segments, detected_lang, audio_download_succeeded = (
                     await _perform_audio_transcription(url, platform, metadata, req.language, temp_dir)
                 )
-
-            if req.extract_ocr:
+            elif req.extract_ocr:
                 on_screen_text = await _perform_visual_ocr(url, temp_dir)
         except Exception as e:
             logger.error(f"Error during video processing pipeline: {e}")

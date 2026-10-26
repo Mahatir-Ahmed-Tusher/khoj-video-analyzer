@@ -7,6 +7,8 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import logging
 import socket
+import time
+import random
 from typing import Dict, Any, Optional, Tuple, List
 import yt_dlp
 import httpx
@@ -136,6 +138,9 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None, platform: Optional[str] =
         if pot_server_reachable(pot_url):
             opts['extractor_args']['youtubepot-bgutilhttp'] = {'base_url': [pot_url]}
             logger.info(f"Attached bgutil PO-token provider from {pot_url}")
+    elif platform == "instagram":
+        opts['socket_timeout'] = 15
+        opts['retries'] = 3
 
     # Apply cookies across all platforms (crucial for Facebook, Instagram, Twitter, YouTube on cloud IPs)
     cookies_path = get_effective_cookies_path()
@@ -947,15 +952,22 @@ def download_reddit_media_fallback(url: str, target_dir: str, is_video: bool = F
         logger.warning(f"Reddit media fallback download failed: {ex}")
     return None
 
+INSTAGRAM_USER_AGENTS = [
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+]
+
 def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
     """
     Download ONLY the lowest bitrate audio stream (32-64kbps).
     Extremely lightweight: typical 2-minute video audio is only ~1MB to 2MB.
     Implements multi-stage fallback:
       1. Primary yt-dlp with android client & anti-bot evasion
-      2. If primary fails (e.g. proxy or cookie error), retry direct with clean android options
-      3. If YouTube and yt-dlp fails, query Invidious public API instances to fetch audio
-      4. If Reddit and yt-dlp fails, query unauthenticated Reddit stream resolver
+      2. If Instagram, auto-retry with mobile UA rotation and backoff (keeps session cookies)
+      3. If primary fails (e.g. proxy or cookie error), retry direct with clean android options
+      4. If YouTube and yt-dlp fails, query Invidious public API instances to fetch audio
+      5. If Reddit and yt-dlp fails, query unauthenticated Reddit stream resolver
     """
     platform = detect_platform(url)
     output_template = os.path.join(target_dir, "audio.%(ext)s")
@@ -968,8 +980,27 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
         'noplaylist': True,
         'concurrent_fragment_downloads': 4, # Speeds up Twitter/Facebook m3u8 fragments 4x
     })
+
+    # Dedicated resilient retry loop for Instagram: rotates mobile UAs with jittered backoff while preserving cookies
+    if platform == "instagram":
+        for attempt, insta_ua in enumerate(INSTAGRAM_USER_AGENTS, start=1):
+            try:
+                curr_opts = dict(ydl_opts)
+                curr_opts['user_agent'] = insta_ua
+                curr_opts['http_headers'] = dict(curr_opts.get('http_headers', {}))
+                curr_opts['http_headers']['User-Agent'] = insta_ua
+                with yt_dlp.YoutubeDL(curr_opts) as ydl:
+                    ydl.extract_info(url, download=True)
+                    for file in os.listdir(target_dir):
+                        if file.startswith("audio."):
+                            return os.path.join(target_dir, file)
+            except Exception as insta_err:
+                logger.warning(f"Instagram audio download attempt {attempt} failed: {insta_err}")
+                if attempt < len(INSTAGRAM_USER_AGENTS):
+                    time.sleep(random.uniform(1.2, 2.2))
+        return None
     
-    # 1. Primary download attempt
+    # 1. Primary download attempt for non-Instagram platforms
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.extract_info(url, download=True)
@@ -1019,7 +1050,7 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
 
 def download_video_for_ocr(url: str, target_dir: str) -> Optional[str]:
     """
-    Download a low-resolution (360p or lower) video stream strictly for frame OCR.
+    Download a low-resolution (360p or lower) video stream for frame OCR and audio extraction.
     Never downloads 1080p/4K; 360p keeps memory usage under 10MB.
     """
     platform = detect_platform(url)
@@ -1027,12 +1058,31 @@ def download_video_for_ocr(url: str, target_dir: str) -> Optional[str]:
     ydl_opts = get_base_ydl_opts(platform=platform)
     ydl_opts.update({
         'skip_download': False,
-        # Force low-resolution video (supports vertical shorts 360x640 / 720p)
-        'format': 'bestvideo[height<=720]/bestvideo[height<=480]/worstvideo[ext=mp4]/worst[ext=mp4]/worst',
+        # Force low-resolution video with audio track (supports vertical shorts 360x640 / 720p)
+        'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo[height<=480]+bestaudio/best[height<=480]/worstvideo[ext=mp4]/worst[ext=mp4]/worst',
         'outtmpl': output_template,
         'noplaylist': True,
         'concurrent_fragment_downloads': 4,
     })
+
+    # Dedicated resilient retry loop for Instagram
+    if platform == "instagram":
+        for attempt, insta_ua in enumerate(INSTAGRAM_USER_AGENTS, start=1):
+            try:
+                curr_opts = dict(ydl_opts)
+                curr_opts['user_agent'] = insta_ua
+                curr_opts['http_headers'] = dict(curr_opts.get('http_headers', {}))
+                curr_opts['http_headers']['User-Agent'] = insta_ua
+                with yt_dlp.YoutubeDL(curr_opts) as ydl:
+                    ydl.extract_info(url, download=True)
+                    for file in os.listdir(target_dir):
+                        if file.startswith("video_ocr."):
+                            return os.path.join(target_dir, file)
+            except Exception as insta_err:
+                logger.warning(f"Instagram video download attempt {attempt} failed: {insta_err}")
+                if attempt < len(INSTAGRAM_USER_AGENTS):
+                    time.sleep(random.uniform(1.2, 2.2))
+        return None
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

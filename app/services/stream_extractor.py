@@ -21,6 +21,17 @@ from app.config import settings
 
 logger = logging.getLogger("khoj-video-analyzer")
 
+# Known login-wall / error-page titles returned when platforms block unauthenticated access.
+# If fallback scraping resolves one of these strings it is garbage data, not a real video title.
+_BLOCKED_PAGE_TITLES: frozenset = frozenset({
+    "instagram", "login \u2022 instagram", "sign up \u2022 instagram",
+    "tiktok", "visit tiktok to discover videos!", "tiktok - make your day",
+    "reddit - the heart of the internet", "reddit - dive into anything",
+    "log in to facebook", "facebook",
+    "vimeo", "log in to vimeo",
+    "twitter", "x / twitter", "x (formerly twitter)",
+})
+
 def detect_platform(url: str) -> str:
     """
     Detect the source social media or hosting platform from URL.
@@ -28,15 +39,15 @@ def detect_platform(url: str) -> str:
     u = url.lower()
     if "youtube.com" in u or "youtu.be" in u:
         return "youtube"
-    elif "facebook.com" in u or "fb.watch" in u or "fb.com" in u:
+    elif "facebook.com" in u or "fb.watch" in u or "fb.com" in u or "fb.gg" in u:
         return "facebook"
-    elif "instagram.com" in u:
+    elif "instagram.com" in u or "instagr.am" in u:
         return "instagram"
-    elif "twitter.com" in u or "x.com" in u:
+    elif "twitter.com" in u or "x.com" in u or "//t.co/" in u:
         return "twitter"
     elif "tiktok.com" in u:
         return "tiktok"
-    elif "reddit.com" in u or "v.redd.it" in u:
+    elif "reddit.com" in u or "v.redd.it" in u or "redd.it" in u:
         return "reddit"
     return "generic"
 
@@ -51,7 +62,7 @@ def get_effective_cookies_path() -> Optional[str]:
         return settings.YT_COOKIES_PATH
 
     raw_text = ""
-    cookies_base64 = os.getenv("YT_COOKIES_BASE64", "").strip()
+    cookies_base64 = settings.YT_COOKIES_BASE64.strip()
     if cookies_base64:
         try:
             raw_text = base64.b64decode(cookies_base64).decode("utf-8", errors="ignore")
@@ -745,7 +756,25 @@ async def fallback_scrape_metadata(url: str, platform: str) -> Dict[str, Any]:
                     title = og_title['content'].strip()
                 elif soup.title:
                     title = soup.title.string.strip() if soup.title.string else ""
-                    
+
+                # Guard: if the title matches a known login-wall/block page, this is not real metadata.
+                # Returning success=True here would poison the FactCheck engine with garbage claim data.
+                if not title or title.strip().lower() in _BLOCKED_PAGE_TITLES:
+                    logger.warning(
+                        f"fallback_scrape_metadata: login/block page detected for '{platform}' "
+                        f"(scraped title: '{title}'). Returning failure to prevent false-positive success."
+                    )
+                    return {
+                        "success": False,
+                        "platform": platform,
+                        "video_id": vid,
+                        "title": "Video Claim",
+                        "author": platform.capitalize(),
+                        "duration_seconds": 0,
+                        "thumbnail_url": None,
+                        "existing_subtitles": "",
+                    }
+
                 author = ""
                 og_site = soup.find('meta', property='og:site_name')
                 if og_site and og_site.get('content'):
@@ -846,7 +875,15 @@ def download_reddit_media_fallback(url: str, target_dir: str, is_video: bool = F
         )
         with urllib.request.urlopen(req, timeout=12) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
-            
+
+            # Early bail-out: rapidsave signals errors via alert-danger Bootstrap div
+            if "alert-danger" in html or "rate limits blocked" in html.lower():
+                logger.warning(
+                    f"rapidsave rate-limited or rejected Reddit URL '{url}'. "
+                    f"Stream URL resolution not possible."
+                )
+                return None
+
             stream_url = None
             if not is_video:
                 # Prefer audio-only stream first

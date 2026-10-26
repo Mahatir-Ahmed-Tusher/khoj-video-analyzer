@@ -16,6 +16,9 @@ __pycache__/
 .env
 .env.*
 !.env.example
+cookies/
+*cookies*.txt
+
 
 # Local cache & temporary media
 hf_cache/
@@ -31,6 +34,7 @@ Thumbs.db
 # Internal private guides & test scratch files
 DEPLOYMENT_GUIDE_INTERNAL.md
 test_*.py
+!test_video_analyzer.py
 compare_*.py
 run_transcription_batch.py
 transcribe_*.py

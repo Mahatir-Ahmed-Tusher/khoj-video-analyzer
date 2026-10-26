@@ -150,6 +150,7 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
     spoken_segments = []
     detected_lang = "unknown"
     on_screen_text = []
+    audio_download_succeeded = False  # Tracks whether the audio stream was actually downloaded
     
     # 2. Process streams in isolated temporary directory with auto-purge
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -176,6 +177,7 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
                 if not spoken_transcript:
                     audio_path = await asyncio.to_thread(download_audio_stream, url, temp_dir)
                     if audio_path and os.path.exists(audio_path):
+                        audio_download_succeeded = True
                         logger.info(f"Audio stream downloaded ({os.path.getsize(audio_path) / 1024:.1f} KB). Starting Whisper transcription...")
                         spoken_transcript, spoken_segments, detected_lang = await asyncio.to_thread(
                             transcriber_service.transcribe,
@@ -264,7 +266,18 @@ async def analyze_video_url(req: AnalyzeRequest, background_tasks: BackgroundTas
         merged_content_for_factcheck=merged_summary,
         detected_language=detected_lang,
         processing_time_seconds=elapsed,
-        message="Analysis completed successfully." if spoken_transcript else "Could not download media stream from URL (platform anti-bot block on cloud IP). Please use direct media file upload, or switch to your local server (127.0.0.1:8080)."
+        message=(
+            "Analysis completed successfully (audio transcription was not requested)."
+            if not req.extract_audio
+            else "Analysis completed successfully (no spoken speech detected in audio stream)."
+            if audio_download_succeeded and not spoken_transcript
+            else (
+                "Could not download media stream from URL (platform anti-bot block or auth required). "
+                "Please use direct media file upload, or switch to your local server (127.0.0.1:8080)."
+            )
+            if not audio_download_succeeded and req.extract_audio and not spoken_transcript
+            else "Analysis completed successfully."
+        )
     )
 
     # Automatically persist completed analysis to disk so work is never lost

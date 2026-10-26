@@ -10,7 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
     WHISPER_MODEL_HI=ammaraldirawi/faster-whisper-small-hi-int8 \
     WHISPER_MODEL_EN=Systran/faster-whisper-tiny.en \
     WHISPER_DEVICE=cpu \
-    WHISPER_COMPUTE_TYPE=default \
+    WHISPER_COMPUTE_TYPE=int8 \
     WHISPER_CPU_THREADS=2 \
     ENABLE_BENGALI_REFINER=true \
     GEMINI_PRIMARY_MODEL=gemini-3.5-flash-lite \
@@ -20,28 +20,19 @@ ENV PYTHONUNBUFFERED=1 \
     BANGLA_OCR_API_URL=https://bangla-ocr-api.mahatirtusher.workers.dev/ocr \
     OCR_LANGUAGES=ben+eng
 
-# Install system dependencies: FFmpeg, CA certs, Curl, Node.js, Git, Unzip
+# Install system dependencies: FFmpeg, CA certs, Curl, Node.js, Unzip
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libglib2.0-0 \
     ca-certificates \
     curl \
-    git \
     nodejs \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Deno (preferred runtime for yt-dlp challenge solver and bgutil PO-Token provider)
+# Install Deno (yt-dlp default preferred JS runtime for YouTube BotGuard & n-challenge solver)
 RUN curl -fsSL https://deno.land/install.sh | sh && \
     ln -s /root/.deno/bin/deno /usr/local/bin/deno
-
-# Install bgutil PO-Token provider server for YouTube anti-bot bypass on cloud datacenter IPs
-ENV DENO_DIR=/opt/deno-cache
-RUN git clone --depth 1 --branch "1.3.1" \
-    https://github.com/Brainicism/bgutil-ytdlp-pot-provider /opt/bgutil \
-    && cd /opt/bgutil/server \
-    && deno install --entrypoint src/main.ts \
-    && chmod -R a+rX /opt/deno-cache /opt/bgutil
 
 WORKDIR /app
 
@@ -52,17 +43,15 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Pre-download fine-tuned Bengali, Hindi Whisper, and multilingual detector into image cache for instant cold starts
 RUN python3 -c "from faster_whisper import WhisperModel; \
-WhisperModel('ammaraldirawi/faster-whisper-small-bn-int8', device='cpu', compute_type='default'); \
-WhisperModel('ammaraldirawi/faster-whisper-small-hi-int8', device='cpu', compute_type='default'); \
-WhisperModel('Systran/faster-whisper-tiny', device='cpu', compute_type='default')"
+WhisperModel('ammaraldirawi/faster-whisper-small-bn-int8', device='cpu', compute_type='int8'); \
+WhisperModel('ammaraldirawi/faster-whisper-small-hi-int8', device='cpu', compute_type='int8'); \
+WhisperModel('Systran/faster-whisper-tiny', device='cpu', compute_type='int8')"
 
-# Copy application source code and entrypoint
+# Copy application source code
 COPY app/ ./app/
-COPY entrypoint.sh ./entrypoint.sh
-RUN chmod +x ./entrypoint.sh
 
 # Expose standard Cloud Run port
 EXPOSE 8080
 
-# Execute entrypoint (starts PO-token daemon and uvicorn)
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Run FastAPI with Uvicorn
+CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1

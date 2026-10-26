@@ -6,6 +6,7 @@ import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 import logging
+import socket
 from typing import Dict, Any, Optional, Tuple, List
 import yt_dlp
 import httpx
@@ -77,10 +78,21 @@ def get_effective_cookies_path() -> Optional[str]:
 
     return None
 
+def pot_server_reachable(url: str = "http://127.0.0.1:4416", timeout: float = 0.5) -> bool:
+    """Probe the bgutil POT server with a quick TCP connect."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 4416
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (OSError, Exception):
+        return False
+
 def get_base_ydl_opts(custom_ua: Optional[str] = None, platform: Optional[str] = None) -> Dict[str, Any]:
     """
-    Build hardened yt-dlp options with anti-bot evasion, Node.js EJS challenge solver,
-    and optional proxy or cookie authentication.
+    Build hardened yt-dlp options with anti-bot evasion, Node.js/Deno EJS challenge solver,
+    Proof of Origin (PO) token generation, and optional proxy or cookie authentication.
     """
     ua = custom_ua or settings.DEFAULT_USER_AGENT
     
@@ -105,9 +117,13 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None, platform: Optional[str] =
     if platform == "youtube" or platform is None:
         opts['extractor_args'] = {
             'youtube': {
-                'player_client': ['android', 'ios'],
+                'player_client': ['android', 'web', 'mweb'],
             }
         }
+        pot_url = getattr(settings, 'POT_SERVER', 'http://127.0.0.1:4416')
+        if pot_server_reachable(pot_url):
+            opts['extractor_args']['youtubepot-bgutilhttp'] = {'base_url': [pot_url]}
+            logger.info(f"Attached bgutil PO-token provider from {pot_url}")
 
     # Apply cookies across all platforms (crucial for Facebook, Instagram, Twitter, YouTube on cloud IPs)
     cookies_path = get_effective_cookies_path()
@@ -784,7 +800,7 @@ def download_youtube_audio_invidious(video_id: str, target_dir: str) -> Optional
                     "Accept": "application/json"
                 }
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=3) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 adaptive = data.get("adaptiveFormats", [])
                 audio = [f for f in adaptive if f.get("type", "").startswith("audio/") and f.get("url")]
@@ -803,7 +819,7 @@ def download_youtube_audio_invidious(video_id: str, target_dir: str) -> Optional
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                     }
                 )
-                with urllib.request.urlopen(dl_req, timeout=25) as dl_resp, open(out_path, "wb") as out_f:
+                with urllib.request.urlopen(dl_req, timeout=10) as dl_resp, open(out_path, "wb") as out_f:
                     while True:
                         chunk = dl_resp.read(128 * 1024)
                         if not chunk:
@@ -907,6 +923,13 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
             clean_opts = dict(ydl_opts)
             clean_opts.pop('cookiefile', None)
             clean_opts.pop('proxy', None)
+            if platform == "youtube":
+                clean_opts['extractor_args'] = {
+                    'youtube': {'player_client': ['web', 'mweb', 'android']}
+                }
+                pot_url = getattr(settings, 'POT_SERVER', 'http://127.0.0.1:4416')
+                if pot_server_reachable(pot_url):
+                    clean_opts['extractor_args']['youtubepot-bgutilhttp'] = {'base_url': [pot_url]}
             with yt_dlp.YoutubeDL(clean_opts) as ydl:
                 ydl.extract_info(url, download=True)
                 for file in os.listdir(target_dir):

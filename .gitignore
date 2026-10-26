@@ -3,6 +3,7 @@ venv/
 .venv/
 env/
 ENV/
+frontend/
 
 # Python cache & artifacts
 __pycache__/

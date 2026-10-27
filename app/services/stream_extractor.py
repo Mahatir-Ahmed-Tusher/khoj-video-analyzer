@@ -57,7 +57,8 @@ import tempfile
 
 def get_effective_cookies_path() -> Optional[str]:
     """
-    Ensure cookies file exists if YT_COOKIES_PATH, YT_COOKIES_BASE64, or YT_COOKIES_TEXT is configured.
+    Ensure cookies file exists if YT_COOKIES_PATH, YT_COOKIES_BASE64, YT_COOKIES_TEXT,
+    or bundled default cookies are available. Self-hydrates into tempdir.
     """
     if settings.YT_COOKIES_PATH and os.path.exists(settings.YT_COOKIES_PATH):
         logger.info(f"Using cookies from configured path: {settings.YT_COOKIES_PATH}")
@@ -74,13 +75,30 @@ def get_effective_cookies_path() -> Optional[str]:
     if not raw_text and settings.YT_COOKIES_TEXT:
         raw_text = settings.YT_COOKIES_TEXT.strip()
 
+    # Bundled file check in local repo
+    if not raw_text:
+        bundled_local = os.path.join(settings.BASE_DIR, "cookies", "merged_cookies.txt")
+        if os.path.exists(bundled_local):
+            logger.info(f"Using cookies from bundled local file: {bundled_local}")
+            return bundled_local
+
+    # Fallback to embedded default cookies (ensures Cloud Run always has valid cookies without manual setup)
+    if not raw_text:
+        try:
+            from app.services.default_cookies import DEFAULT_COOKIES_BASE64
+            if DEFAULT_COOKIES_BASE64:
+                raw_text = base64.b64decode(DEFAULT_COOKIES_BASE64).decode("utf-8", errors="ignore")
+                logger.info(f"Self-hydrated default embedded cookies ({len(raw_text)} bytes).")
+        except Exception as e:
+            logger.warning(f"Could not load embedded default cookies: {e}")
+
     if raw_text:
         tmp_dir = tempfile.gettempdir()
         tmp_cookie = os.path.join(tmp_dir, "cookies.txt")
         try:
             with open(tmp_cookie, "w", encoding="utf-8") as f:
                 f.write(raw_text)
-            logger.info(f"Successfully loaded {len(raw_text)} bytes of YouTube cookies to {tmp_cookie}")
+            logger.info(f"Successfully loaded {len(raw_text)} bytes of cookies to {tmp_cookie}")
             return tmp_cookie
         except Exception as e:
             logger.error(f"Failed to write cookies to file: {e}")
@@ -130,8 +148,7 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None, platform: Optional[str] =
     if platform == "youtube" or platform is None:
         opts['extractor_args'] = {
             'youtube': {
-                'player_client': ['android'],
-                'player_skip': ['web', 'mweb'],
+                'player_client': ['web', 'android', 'ios'],
             }
         }
         pot_url = getattr(settings, 'POT_SERVER', 'http://127.0.0.1:4416')
@@ -1040,8 +1057,7 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
             if platform == "youtube":
                 clean_opts['extractor_args'] = {
                     'youtube': {
-                        'player_client': ['android'],
-                        'player_skip': ['web', 'mweb'],
+                        'player_client': ['web', 'android', 'ios'],
                     }
                 }
             with yt_dlp.YoutubeDL(clean_opts) as ydl:

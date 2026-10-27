@@ -43,3 +43,4 @@ generate_report.py
 *.json
 *.md
 !README.md
+!docs/*.md

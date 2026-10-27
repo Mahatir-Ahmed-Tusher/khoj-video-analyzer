@@ -33,6 +33,7 @@ Thumbs.db
 
 # Internal private guides & test scratch files
 DEPLOYMENT_GUIDE_INTERNAL.md
+docs/
 test_*.py
 !test_video_analyzer.py
 compare_*.py
@@ -43,4 +44,3 @@ generate_report.py
 *.json
 *.md
 !README.md
-!docs/*.md

@@ -18,7 +18,9 @@ from app.services.stream_extractor import (
     detect_platform,
     fetch_youtube_captions,
     extract_youtube_video_id,
-    get_effective_cookies_path
+    get_effective_cookies_path,
+    get_last_stream_error,
+    get_base_ydl_opts
 )
 from app.services.audio_transcriber import transcriber_service
 from app.services.bengali_refiner import bengali_refiner
@@ -166,6 +168,38 @@ async def health_check():
         "cookies": f"loaded ({os.path.getsize(cookies_path)} bytes)" if cookies_path and os.path.exists(cookies_path) else "not_configured",
         "r2_storage": "configured (ephemeral/auto-delete)" if r2_service.is_configured() else "not_configured"
     }
+
+@app.get("/debug/ytdl")
+async def debug_ytdl(url: str = "https://youtu.be/28Lj4qt3lCc"):
+    """Diagnostic endpoint to inspect yt-dlp format extraction and error reporting on Cloud Run."""
+    import yt_dlp
+    import traceback
+    platform = detect_platform(url)
+    ydl_opts = get_base_ydl_opts(platform=platform)
+    ydl_opts['skip_download'] = True
+    cookie_path = get_effective_cookies_path()
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            formats = [
+                f"{f.get('format_id')}: {f.get('ext')} ({f.get('resolution')}) acodec={f.get('acodec')} vcodec={f.get('vcodec')} url={f.get('url') is not None}"
+                for f in (info.get('formats') or [])
+            ]
+            return {
+                "success": True,
+                "title": info.get("title"),
+                "cookie_path": cookie_path,
+                "formats_count": len(formats),
+                "formats": formats[:10]
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "cookie_path": cookie_path,
+            "error_type": type(e).__name__,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
 
 async def _perform_audio_transcription(
     url: str,
@@ -328,7 +362,7 @@ async def transcribe_video_url(req: TranscribeRequest, background_tasks: Backgro
             if spoken_transcript
             else "No spoken speech detected in audio stream."
             if audio_download_succeeded
-            else "Could not download audio stream from URL (platform anti-bot block or auth required)."
+            else f"Could not download audio stream from URL: {get_last_stream_error() or 'platform anti-bot block or auth required'}."
         )
     )
 

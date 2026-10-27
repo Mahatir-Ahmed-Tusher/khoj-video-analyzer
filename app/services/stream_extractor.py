@@ -146,14 +146,11 @@ def get_base_ydl_opts(custom_ua: Optional[str] = None, platform: Optional[str] =
     
     # Platform-specific configurations
     if platform == "youtube" or platform is None:
-        opts['extractor_args'] = {
-            'youtube': {
-                'player_client': ['web', 'android', 'ios'],
-            }
-        }
         pot_url = getattr(settings, 'POT_SERVER', 'http://127.0.0.1:4416')
         if pot_server_reachable(pot_url):
-            opts['extractor_args']['youtubepot-bgutilhttp'] = {'base_url': [pot_url]}
+            opts['extractor_args'] = {
+                'youtubepot-bgutilhttp': {'base_url': [pot_url]}
+            }
             logger.info(f"Attached bgutil PO-token provider from {pot_url}")
     elif platform == "instagram":
         opts['socket_timeout'] = 15
@@ -996,17 +993,26 @@ INSTAGRAM_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 ]
 
+_last_stream_error: str = ""
+
+def get_last_stream_error() -> str:
+    global _last_stream_error
+    return _last_stream_error
+
 def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
     """
     Download ONLY the lowest bitrate audio stream (32-64kbps).
     Extremely lightweight: typical 2-minute video audio is only ~1MB to 2MB.
     Implements multi-stage fallback:
-      1. Primary yt-dlp with android client & anti-bot evasion
+      1. Primary yt-dlp with adaptive modern clients (TV/visionOS/web) & EJS challenge solver
       2. If Instagram, auto-retry with mobile UA rotation and backoff (keeps session cookies)
-      3. If primary fails (e.g. proxy or cookie error), retry direct with clean android options
+      3. If primary fails (e.g. proxy or cookie error), retry direct with clean options
       4. If YouTube and yt-dlp fails, query Invidious public API instances to fetch audio
       5. If Reddit and yt-dlp fails, query unauthenticated Reddit stream resolver
     """
+    global _last_stream_error
+    _last_stream_error = ""
+
     platform = detect_platform(url)
     output_template = os.path.join(target_dir, "audio.%(ext)s")
     ydl_opts = get_base_ydl_opts(platform=platform)
@@ -1033,6 +1039,7 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
                         if file.startswith("audio."):
                             return os.path.join(target_dir, file)
             except Exception as insta_err:
+                _last_stream_error = str(insta_err)
                 logger.warning(f"Instagram audio download attempt {attempt} failed: {insta_err}")
                 if attempt < len(INSTAGRAM_USER_AGENTS):
                     time.sleep(random.uniform(1.2, 2.2))
@@ -1046,6 +1053,7 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
                 if file.startswith("audio."):
                     return os.path.join(target_dir, file)
     except Exception as e:
+        _last_stream_error = str(e)
         logger.warning(f"Primary audio download failed: {e}. Attempting clean retry...")
 
     # 2. Retry direct without cookies or proxy if primary failed
@@ -1054,18 +1062,13 @@ def download_audio_stream(url: str, target_dir: str) -> Optional[str]:
             clean_opts = dict(ydl_opts)
             clean_opts.pop('cookiefile', None)
             clean_opts.pop('proxy', None)
-            if platform == "youtube":
-                clean_opts['extractor_args'] = {
-                    'youtube': {
-                        'player_client': ['web', 'android', 'ios'],
-                    }
-                }
             with yt_dlp.YoutubeDL(clean_opts) as ydl:
                 ydl.extract_info(url, download=True)
                 for file in os.listdir(target_dir):
                     if file.startswith("audio."):
                         return os.path.join(target_dir, file)
         except Exception as retry_err:
+            _last_stream_error = f"{_last_stream_error} | Retry error: {retry_err}"
             logger.warning(f"Direct clean retry also failed: {retry_err}")
 
     # 3. For YouTube: fallback to Invidious API
